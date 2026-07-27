@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
-
-const API = 'http://localhost:8000/api'
+import { useState, useEffect } from 'react'
+import { API_BASE_URL, getUploadedFileUrl } from '../config/runtime'
 
 interface CW {
   id: number; title: string; date: string; description: string
@@ -123,8 +122,8 @@ export default function Courseware() {
   const fetchItems = (tag?: string) => {
     setLoading(true)
     const url = tag && tag !== '全部'
-      ? `${API}/courseware/list?tag=${encodeURIComponent(tag)}`
-      : `${API}/courseware/list`
+      ? `${API_BASE_URL}/courseware/list?tag=${encodeURIComponent(tag)}`
+      : `${API_BASE_URL}/courseware/list`
     fetch(url)
       .then(r => r.json())
       .then(d => { setItems(d); setLoading(false) })
@@ -176,7 +175,7 @@ export default function Courseware() {
 
               {selected.pdf_path ? (
                 <PDFViewer
-                  url={`http://localhost:8000/data/uploads/${selected.pdf_path.split('/').pop()}`}
+                  url={getUploadedFileUrl(selected.pdf_path)}
                   title={selected.title}
                 />
               ) : (
@@ -189,7 +188,7 @@ export default function Courseware() {
 
               {selected.pptx_path && (
                 <div style={{ marginTop: '20px', textAlign: 'center' }}>
-                  <a href={`http://localhost:8000/data/uploads/${selected.pptx_path.split('/').pop()}`}
+                  <a href={getUploadedFileUrl(selected.pptx_path)}
                     className="btn btn-primary" download>
                     📥 下载原始课件
                   </a>

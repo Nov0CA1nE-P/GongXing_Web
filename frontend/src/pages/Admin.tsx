@@ -1,7 +1,6 @@
 import { useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
-
-const API = 'http://localhost:8000/api'
+import { API_BASE_URL } from '../config/runtime'
 
 type Tab = 'pending' | 'pending_follow_ups' | 'allqa' | 'messages' | 'contacts' | 'upload'
 
@@ -27,7 +26,7 @@ function Admin() {
 
   const toast_ = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2800) }
 
-  const api = (path: string) => `${API}${path}?password=${encodeURIComponent(pwd)}`
+  const api = (path: string) => `${API_BASE_URL}${path}?password=${encodeURIComponent(pwd)}`
 
   const login = async () => {
     setLoading(true)
@@ -60,16 +59,15 @@ function Admin() {
         const r = await fetch(api('/contact/submissions'))
         if (r.ok) setContacts(await r.json())
       } else if (t === 'messages') {
-        const r = await fetch(api('/guestbook/messages?limit=100').replace(`?password=${pwd}&`, `?password=${pwd}&`))
         // messages 不用密码也能读，但要用不同 URL
-        const r2 = await fetch(`${API}/guestbook/messages?limit=100`)
+        const r2 = await fetch(`${API_BASE_URL}/guestbook/messages?limit=100`)
         if (r2.ok) setMsgs((await r2.json()).messages)
       }
     } catch {}
   }
 
   const review = async (aid: number, s: string) => {
-    const r = await fetch(`${API}/qanda/answers/${aid}/review`, {
+    const r = await fetch(`${API_BASE_URL}/qanda/answers/${aid}/review`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: pwd, status: s }),
     })
@@ -77,7 +75,7 @@ function Admin() {
   }
 
   const reviewFollowUp = async (fid: number, s: string) => {
-    const r = await fetch(`${API}/qanda/follow-ups/${fid}/review`, {
+    const r = await fetch(`${API_BASE_URL}/qanda/follow-ups/${fid}/review`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: pwd, status: s }),
     })
@@ -86,20 +84,20 @@ function Admin() {
 
   const deleteFollowUp = async (fid: number) => {
     if (!confirm('确定删除这条追问吗？')) return
-    await fetch(`${API}/qanda/follow-ups/${fid}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
+    await fetch(`${API_BASE_URL}/qanda/follow-ups/${fid}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
     toast_('已删除')
     fetchData('pending_follow_ups')
   }
 
   const deleteQA = async (qid: number) => {
     if (!confirm('确定要删除这条问答吗？')) return
-    const r = await fetch(`${API}/qanda/questions/${qid}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
+    const r = await fetch(`${API_BASE_URL}/qanda/questions/${qid}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
     if (r.ok) { toast_('已删除'); fetchData(tab) }
   }
 
   const deleteMsg = async (mid: number) => {
     if (!confirm('确定要删除这条留言吗？')) return
-    const r = await fetch(`${API}/guestbook/messages/${mid}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
+    const r = await fetch(`${API_BASE_URL}/guestbook/messages/${mid}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
     if (r.ok) { toast_('已删除'); fetchData('messages') }
   }
 
@@ -108,7 +106,7 @@ function Admin() {
     const fd = new FormData()
     fd.append('title', cwTitle); fd.append('date', cwDate)
     fd.append('description', cwDesc); fd.append('tags', cwTags); fd.append('file', cwFile)
-    const r = await fetch(`${API}/courseware/upload`, { method: 'POST', body: fd })
+    const r = await fetch(`${API_BASE_URL}/courseware/upload`, { method: 'POST', body: fd })
     if (r.ok) {
       toast_('课件上传成功')
       setCwTitle(''); setCwDate(''); setCwDesc(''); setCwTags(''); setCwFile(null)

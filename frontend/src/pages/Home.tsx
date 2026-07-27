@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-
-const API = 'http://localhost:8000/api'
+import { API_BASE_URL } from '../config/runtime'
 
 interface Stats { published_qa: number; total_courseware: number; total_messages: number; total_likes: number }
 
@@ -39,7 +38,7 @@ export default function Home() {
   const [stats, setStats] = useState<Stats | null>(null)
 
   useEffect(() => {
-    fetch(`${API}/qanda/stats`)
+    fetch(`${API_BASE_URL}/qanda/stats`)
       .then(r => r.json())
       .then(setStats)
       .catch(() => {})

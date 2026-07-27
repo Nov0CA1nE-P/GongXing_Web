@@ -6,7 +6,6 @@ export default function Explore() {
   const [selectedCat, setSelectedCat] = useState<Category | null>(null)
   const [selectedMajor, setSelectedMajor] = useState<Major | null>(null)
   const [expandedCat, setExpandedCat] = useState<string | null>(null)
-  const [expandedMajorCat, setExpandedMajorCat] = useState<Category | null>(null)
 
   const resetCat = () => { setSelectedCat(null); setSelectedMajor(null) }
   const resetMajor = () => setSelectedMajor(null)

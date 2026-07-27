@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
-
-const API = 'http://localhost:8000/api'
+import { API_BASE_URL } from '../config/runtime'
 
 // 50道测试题，分为6个维度
 interface Question {
@@ -153,7 +152,7 @@ ${profile}
 请用亲切的"学长学姐"口吻，直接称呼"你"，不要说"这位同学"。Markdown 格式输出。`
 
     try {
-      const r = await fetch('http://localhost:8000/api/qanda/analyze-personality', {
+      const r = await fetch(`${API_BASE_URL}/qanda/analyze-personality`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt }),

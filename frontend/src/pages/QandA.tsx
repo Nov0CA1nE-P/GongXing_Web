@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
-
-const API = 'http://localhost:8000/api'
+import { API_BASE_URL } from '../config/runtime'
 
 interface QA {
   id: number; author: string; content: string; created_at: string
@@ -43,7 +42,7 @@ export default function QandA() {
   })
 
   const fetchQ = () => {
-    fetch(`${API}/qanda/questions`)
+    fetch(`${API_BASE_URL}/qanda/questions`)
       .then(r => r.json())
       .then(d => { setQuestions(d.questions); setLoading(false) })
       .catch(() => setLoading(false))
@@ -57,7 +56,7 @@ export default function QandA() {
     setSubmitting(true); setSubmitMsg('')
     try {
       const name = author.trim() || '匿名'
-      const r = await fetch(`${API}/qanda/questions`, {
+      const r = await fetch(`${API_BASE_URL}/qanda/questions`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ author: name, content: content.trim() }),
       })
@@ -74,7 +73,7 @@ export default function QandA() {
   const loadFollowUps = async (qid: number) => {
     if (followUps[qid]) return
     try {
-      const r = await fetch(`${API}/qanda/questions/${qid}/follow-ups`)
+      const r = await fetch(`${API_BASE_URL}/qanda/questions/${qid}/follow-ups`)
       if (r.ok) {
         const data = await r.json()
         setFollowUps(prev => ({ ...prev, [qid]: data }))
@@ -89,7 +88,7 @@ export default function QandA() {
     setSubmittingFollowUp(prev => ({ ...prev, [qid]: true }))
     try {
       const name = followUpAuthor[qid]?.trim() || '匿名'
-      await fetch(`${API}/qanda/questions/${qid}/follow-ups`, {
+      await fetch(`${API_BASE_URL}/qanda/questions/${qid}/follow-ups`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ author: name, content: text.trim() }),
       })
@@ -103,7 +102,7 @@ export default function QandA() {
   const doLike = async (answerId: number) => {
     if (likedIds.includes(answerId)) return
     try {
-      const r = await fetch(`${API}/qanda/answers/${answerId}/like`, { method: 'POST' })
+      const r = await fetch(`${API_BASE_URL}/qanda/answers/${answerId}/like`, { method: 'POST' })
       if (r.ok) {
         const data = await r.json()
         setLikedIds(prev => { const n = [...prev, answerId]; localStorage.setItem('qa_liked', JSON.stringify(n)); return n })
