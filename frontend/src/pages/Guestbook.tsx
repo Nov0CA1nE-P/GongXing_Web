@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
-
-const API = 'http://localhost:8000/api'
+import { API_BASE_URL } from '../config/runtime'
 
 interface Reply { id: number; author: string; content: string; created_at: string; reactions: string }
 interface Msg { id: number; author: string; content: string; created_at: string; replies: Reply[]; reactions: string }
@@ -21,7 +20,7 @@ export default function Guestbook() {
   const [total, setTotal] = useState(0)
 
   const fetchMsgs = (p = 1) => {
-    fetch(`${API}/guestbook/messages?page=${p}`)
+    fetch(`${API_BASE_URL}/guestbook/messages?page=${p}`)
       .then(r => r.json())
       .then(d => { setMsgs(d.messages); setTotal(d.total); setLoading(false) })
       .catch(() => setLoading(false))
@@ -36,7 +35,7 @@ export default function Guestbook() {
     setSubmitting(true)
     try {
       const name = pid ? (rAuthor.trim() || '匿名') : (author.trim() || '匿名')
-      await fetch(`${API}/guestbook/messages`, {
+      await fetch(`${API_BASE_URL}/guestbook/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ author: name, content: text.trim(), parent_id: pid }),
@@ -51,7 +50,7 @@ export default function Guestbook() {
   const del = async (id: number) => {
     const pwd = prompt('管理员密码：') || ''
     if (!pwd) return
-    const r = await fetch(`${API}/guestbook/messages/${id}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
+    const r = await fetch(`${API_BASE_URL}/guestbook/messages/${id}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
     if (r.ok) { fetchMsgs(page); showToast('已删除') }
     else alert('密码错误')
   }
@@ -231,7 +230,7 @@ function ReactionBar({ msgId, reactions, onReacted }: { msgId: number; reactions
     if (loading) return
     setLoading(true)
     try {
-      await fetch(`${API}/guestbook/messages/${msgId}/react?emoji=${encodeURIComponent(emoji)}`, { method: 'POST' })
+      await fetch(`${API_BASE_URL}/guestbook/messages/${msgId}/react?emoji=${encodeURIComponent(emoji)}`, { method: 'POST' })
       onReacted()
     } catch {}
     setLoading(false)

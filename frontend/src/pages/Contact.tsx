@@ -1,6 +1,5 @@
 import { useState } from 'react'
-
-const API = 'http://localhost:8000/api'
+import { API_BASE_URL } from '../config/runtime'
 
 const MEMBERS = [
   { name: '待填写', major: '待填写', wechat: '待填写', intro: '团队成员介绍待补充', avatar: '' },
@@ -21,7 +20,7 @@ export default function Contact() {
     if (!name.trim() || !message.trim()) return
     setSubmitting(true); setMsg('')
     try {
-      const r = await fetch(`${API}/contact/submit`, {
+      const r = await fetch(`${API_BASE_URL}/contact/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), contact_info: contact.trim(), message: message.trim() }),
