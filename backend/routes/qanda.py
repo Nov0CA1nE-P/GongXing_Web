@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from auth import AdminSession, require_admin
 from database import get_db
 from services.ai_service import ask_deepseek
 
@@ -12,7 +13,6 @@ class QuestionCreate(BaseModel):
 
 
 class AnswerReview(BaseModel):
-    password: str
     status: str  # "published" 或 "rejected"
     content: str | None = None  # 管理员修改后的内容（可选）
 
@@ -23,47 +23,29 @@ class FollowUpCreate(BaseModel):
 
 
 class FollowUpReview(BaseModel):
-    password: str
     status: str
 
 
 @router.get("/questions")
-def list_questions(page: int = 1, limit: int = 20, status: str = "published"):
-    """获取问题列表（公开只返回已发布的问题）"""
+def list_questions(page: int = 1, limit: int = 20):
+    """获取公开问题列表，只返回已发布的问题。"""
     conn = get_db()
     offset = (page - 1) * limit
 
-    if status == "published":
-        total = conn.execute(
-            """SELECT COUNT(DISTINCT q.id) FROM questions q
-               JOIN answers a ON a.question_id = q.id
-               WHERE a.status = 'published'"""
-        ).fetchone()[0]
+    total = conn.execute(
+        """SELECT COUNT(DISTINCT q.id) FROM questions q
+           JOIN answers a ON a.question_id = q.id
+           WHERE a.status = 'published'"""
+    ).fetchone()[0]
 
-        rows = conn.execute(
-            """SELECT q.*, a.content as answer_content, a.id as answer_id, a.status as answer_status, a.likes as answer_likes
-               FROM questions q
-               JOIN answers a ON a.question_id = q.id
-               WHERE a.status = 'published'
-               ORDER BY a.likes DESC, q.created_at DESC LIMIT ? OFFSET ?""",
-            (limit, offset),
-        ).fetchall()
-    else:
-        # pending: 待审核
-        total = conn.execute(
-            """SELECT COUNT(DISTINCT q.id) FROM questions q
-               JOIN answers a ON a.question_id = q.id
-               WHERE a.status = 'pending'"""
-        ).fetchone()[0]
-
-        rows = conn.execute(
-            """SELECT q.*, a.content as answer_content, a.id as answer_id, a.status as answer_status
-               FROM questions q
-               JOIN answers a ON a.question_id = q.id
-               WHERE a.status = 'pending'
-               ORDER BY q.created_at DESC LIMIT ? OFFSET ?""",
-            (limit, offset),
-        ).fetchall()
+    rows = conn.execute(
+        """SELECT q.*, a.content as answer_content, a.id as answer_id, a.status as answer_status, a.likes as answer_likes
+           FROM questions q
+           JOIN answers a ON a.question_id = q.id
+           WHERE a.status = 'published'
+           ORDER BY a.likes DESC, q.created_at DESC LIMIT ? OFFSET ?""",
+        (limit, offset),
+    ).fetchall()
 
     questions = []
     for row in rows:
@@ -119,12 +101,10 @@ async def create_question(q: QuestionCreate):
 
 
 @router.get("/questions/pending")
-def list_pending(password: str):
+def list_pending(
+    _admin: AdminSession = Depends(require_admin),
+):
     """管理员查看待审核的问答"""
-    from config import ADMIN_PASSWORD
-    if password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=403, detail="密码错误")
-
     conn = get_db()
     rows = conn.execute(
         """SELECT q.*, a.content as answer_content, a.id as answer_id
@@ -151,12 +131,12 @@ def list_pending(password: str):
 
 
 @router.put("/answers/{answer_id}/review")
-def review_answer(answer_id: int, review: AnswerReview):
+def review_answer(
+    answer_id: int,
+    review: AnswerReview,
+    _admin: AdminSession = Depends(require_admin),
+):
     """管理员审核回答"""
-    from config import ADMIN_PASSWORD
-    if review.password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=403, detail="密码错误")
-
     if review.status not in ("published", "rejected"):
         raise HTTPException(status_code=400, detail="状态只能为 published 或 rejected")
 
@@ -182,12 +162,11 @@ def review_answer(answer_id: int, review: AnswerReview):
 
 
 @router.delete("/questions/{question_id}")
-def delete_question(question_id: int, password: str):
+def delete_question(
+    question_id: int,
+    _admin: AdminSession = Depends(require_admin),
+):
     """删除问题及关联回答"""
-    from config import ADMIN_PASSWORD
-    if password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=403, detail="密码错误")
-
     conn = get_db()
     conn.execute("DELETE FROM questions WHERE id = ?", (question_id,))
     conn.commit()
@@ -196,12 +175,12 @@ def delete_question(question_id: int, password: str):
 
 
 @router.get("/admin/all")
-def admin_list_all(password: str, page: int = 1, limit: int = 50):
+def admin_list_all(
+    page: int = 1,
+    limit: int = 50,
+    _admin: AdminSession = Depends(require_admin),
+):
     """管理员查看所有问答（含已发布和待审核）"""
-    from config import ADMIN_PASSWORD
-    if password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=403, detail="密码错误")
-
     conn = get_db()
     offset = (page - 1) * limit
     total = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
@@ -351,12 +330,10 @@ async def create_follow_up(question_id: int, req: FollowUpCreate):
 
 
 @router.get("/follow-ups/pending")
-def list_pending_follow_ups(password: str):
+def list_pending_follow_ups(
+    _admin: AdminSession = Depends(require_admin),
+):
     """管理员查看待审核的追问"""
-    from config import ADMIN_PASSWORD
-    if password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=403, detail="密码错误")
-
     conn = get_db()
     rows = conn.execute(
         """SELECT f.*, q.content as question_content
@@ -382,12 +359,12 @@ def list_pending_follow_ups(password: str):
 
 
 @router.put("/follow-ups/{follow_up_id}/review")
-def review_follow_up(follow_up_id: int, review: FollowUpReview):
+def review_follow_up(
+    follow_up_id: int,
+    review: FollowUpReview,
+    _admin: AdminSession = Depends(require_admin),
+):
     """管理员审核追问"""
-    from config import ADMIN_PASSWORD
-    if review.password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=403, detail="密码错误")
-
     if review.status not in ("published", "rejected"):
         raise HTTPException(status_code=400, detail="状态无效")
 
@@ -402,12 +379,11 @@ def review_follow_up(follow_up_id: int, review: FollowUpReview):
 
 
 @router.delete("/follow-ups/{follow_up_id}")
-def delete_follow_up(follow_up_id: int, password: str):
+def delete_follow_up(
+    follow_up_id: int,
+    _admin: AdminSession = Depends(require_admin),
+):
     """管理员删除追问"""
-    from config import ADMIN_PASSWORD
-    if password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=403, detail="密码错误")
-
     conn = get_db()
     conn.execute("DELETE FROM follow_ups WHERE id = ?", (follow_up_id,))
     conn.commit()

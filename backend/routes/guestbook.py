@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from auth import AdminSession, require_admin
 from database import get_db
 
 router = APIRouter(prefix="/api/guestbook", tags=["guestbook"])
@@ -72,12 +73,11 @@ def create_message(msg: MessageCreate):
 
 
 @router.delete("/messages/{message_id}")
-def delete_message(message_id: int, password: str):
-    """删除留言（需要管理员密码）"""
-    from config import ADMIN_PASSWORD
-    if password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=403, detail="密码错误")
-
+def delete_message(
+    message_id: int,
+    _admin: AdminSession = Depends(require_admin),
+):
+    """删除留言（管理员功能）"""
     conn = get_db()
     conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
     conn.commit()

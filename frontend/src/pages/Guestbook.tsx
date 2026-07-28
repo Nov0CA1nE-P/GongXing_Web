@@ -47,14 +47,6 @@ export default function Guestbook() {
     } finally { setSubmitting(false) }
   }
 
-  const del = async (id: number) => {
-    const pwd = prompt('管理员密码：') || ''
-    if (!pwd) return
-    const r = await fetch(`${API_BASE_URL}/guestbook/messages/${id}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
-    if (r.ok) { fetchMsgs(page); showToast('已删除') }
-    else alert('密码错误')
-  }
-
   const totalPages = Math.ceil(total / 20)
 
   if (loading) return <div className="loading" />
@@ -123,9 +115,6 @@ export default function Guestbook() {
                       </span>
                     </div>
                   </div>
-                  <button className="btn btn-ghost btn-sm"
-                    style={{ color: 'var(--ink-lighter)', fontSize: '0.7rem' }}
-                    onClick={() => del(m.id)}>删除</button>
                 </div>
 
                 <p style={{
