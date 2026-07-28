@@ -31,6 +31,8 @@ E:\VibeCoding\projects\Summercamp_website
 
 `ADMIN_SESSION_TTL_SECONDS` 是管理员会话的绝对有效期，默认 7200 秒，允许范围为 300～28800 秒；无效值会导致后端拒绝启动。
 
+`COURSEWARE_MAX_UPLOAD_MB` 是单个课件文件的应用层大小上限，默认 50 MB，允许范围为 1～500 MB；无效值会导致后端拒绝启动。后端会按分块统计真实文件大小，不能只依赖浏览器提供的 `Content-Length`。
+
 ## 启动
 
 Windows 可以运行：
@@ -63,6 +65,53 @@ npm run lint
 ```
 
 后端可以先进行 Python 语法检查，再启动服务并访问 `/api/health`。
+
+## 课件文件存储
+
+项目不会把整个 `data/` 或上传目录作为静态目录公开。课件只能通过以下专用接口访问：
+
+```text
+GET /data/uploads/{filename}
+```
+
+接口只接受安全的单一文件名和 PDF、PPT、PPTX 扩展名；解析后的文件必须位于 `data/uploads/`，符号链接会被拒绝。PDF 使用浏览器内联响应，PPT/PPTX 作为附件下载，响应均包含 `X-Content-Type-Options: nosniff`。因此 `/data/site.db`、临时文件和其他内部数据不会通过 HTTP 提供。
+
+上传时会同时检查扩展名、声明的 MIME 和文件内容：
+
+- PDF 检查 `%PDF-` 文件头。
+- PPT 使用 `olefile` 检查 OLE 容器和 `PowerPoint Document` 数据流。
+- PPTX 检查 ZIP、必要的 OOXML 文件和类型声明；ZIP 最多 2048 个条目，声明的总解压大小不超过 250 MiB，`[Content_Types].xml` 不超过 1 MiB，`ppt/presentation.xml` 不超过 8 MiB。校验不会完整解压 PPTX。
+
+磁盘文件名由服务端随机生成，标题、日期和用户文件名不会参与路径。上传和删除使用非公开临时目录及失败回滚。
+
+删除隔离文件分为两种状态：
+
+- `.recover-*.hold`：数据库尚未确认删除、仍可能需要恢复的副本。数据库失败且自动恢复文件失败时会保留该文件，启动清理永远不会删除，需要管理员人工核对数据库后恢复或处理。
+- `.delete-*.delete`：数据库已经提交删除、只待清理的文件。即时清理失败时，可在超过 24 小时后由启动清理删除。
+
+启动清理除此之外只处理本模块生成且超过 24 小时的 `.upload-*.part`。它不会删除较新的文件、未知名称、符号链接或恢复保留态文件。
+
+应用层文件限制不能替代部署入口的请求体限制。默认 50 MB 配置在正式部署时还应设置 Nginx：
+
+```nginx
+client_max_body_size 51m;
+```
+
+如果调整应用上限，应同步调整 Nginx或云平台的等效限制，并为 multipart 请求留出合理开销。
+
+### 历史课件路径
+
+新数据库记录只保存安全文件名。运行时仍可兼容目录后缀明确为 `data/uploads` 的 Windows 或 POSIX 历史绝对路径，但原始数据库路径永远不会直接用于打开、响应或删除文件。无法可靠映射到当前上传目录的记录不会暴露路径，删除时返回 409。
+
+只读审计工具不会修改数据库，也不会输出原始路径：
+
+```bash
+python scripts/audit_courseware_paths.py \
+  --database <数据库备份或测试数据库> \
+  --uploads-dir <对应上传目录>
+```
+
+本轮不提供自动迁移。真实路径改写应在完成数据库和上传文件备份后，作为独立维护任务执行。
 
 ## 管理员认证与部署限制
 

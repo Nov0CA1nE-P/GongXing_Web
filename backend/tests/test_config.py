@@ -15,6 +15,7 @@ class ConfigValidationTests(unittest.TestCase):
             "APP_ENV",
             "ADMIN_PASSWORD",
             "ADMIN_SESSION_TTL_SECONDS",
+            "COURSEWARE_MAX_UPLOAD_MB",
         ):
             env.pop(name, None)
         env.update(settings)
@@ -99,6 +100,29 @@ class ConfigValidationTests(unittest.TestCase):
             ADMIN_SESSION_TTL_SECONDS="7200",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_courseware_upload_limit_must_be_integer_within_bounds(self):
+        base = {
+            "APP_ENV": "test",
+            "ADMIN_PASSWORD": "a-strong-test-password",
+            "ADMIN_SESSION_TTL_SECONDS": "7200",
+        }
+        for value in ("abc", "0", "501"):
+            with self.subTest(value=value):
+                self.assertNotEqual(
+                    self.import_config(
+                        **base,
+                        COURSEWARE_MAX_UPLOAD_MB=value,
+                    ).returncode,
+                    0,
+                )
+        self.assertEqual(
+            self.import_config(
+                **base,
+                COURSEWARE_MAX_UPLOAD_MB="50",
+            ).returncode,
+            0,
+        )
 
 
 if __name__ == "__main__":
