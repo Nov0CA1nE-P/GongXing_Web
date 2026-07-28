@@ -129,6 +129,7 @@ class AdminRouteTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["authenticated"])
+        self.assertEqual(response.headers["cache-control"], "no-store")
         cookie = response.headers["set-cookie"].lower()
         self.assertIn("httponly", cookie)
         self.assertIn("samesite=strict", cookie)
@@ -137,12 +138,12 @@ class AdminRouteTests(unittest.TestCase):
         self.assertNotIn("expires", cookie)
         self.assertNotIn("a-strong-test-password", cookie)
 
-        self.assertEqual(
-            self.client.get("/api/admin/session").status_code,
-            200,
-        )
+        session_response = self.client.get("/api/admin/session")
+        self.assertEqual(session_response.status_code, 200)
+        self.assertEqual(session_response.headers["cache-control"], "no-store")
         logout = self.client.post("/api/admin/logout")
         self.assertEqual(logout.status_code, 204)
+        self.assertEqual(logout.headers["cache-control"], "no-store")
         self.assertIn("path=/api", logout.headers["set-cookie"].lower())
         self.assertEqual(
             self.client.get("/api/admin/session").status_code,
@@ -157,6 +158,30 @@ class AdminRouteTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
         self.assertNotIn("set-cookie", response.headers)
+
+    def test_unconfigured_authentication_returns_503(self):
+        with patch.object(auth, "ADMIN_AUTH_CONFIGURED", False):
+            response = self.client.post(
+                "/api/admin/login",
+                json={"password": "any-password"},
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("set-cookie", response.headers)
+
+    def test_production_cookie_uses_secure_on_set_and_delete(self):
+        with patch.object(auth, "ADMIN_COOKIE_SECURE", True):
+            login = self.client.post(
+                "/api/admin/login",
+                json={"password": "a-strong-test-password"},
+            )
+            logout = self.client.post("/api/admin/logout")
+
+        login_cookie = login.headers["set-cookie"].lower()
+        logout_cookie = logout.headers["set-cookie"].lower()
+        self.assertIn("secure", login_cookie)
+        self.assertIn("path=/api", login_cookie)
+        self.assertIn("secure", logout_cookie)
+        self.assertIn("path=/api", logout_cookie)
 
     def test_valid_non_admin_session_returns_403(self):
         token, _ = self.store.create(role="viewer")
