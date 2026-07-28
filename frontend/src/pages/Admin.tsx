@@ -1,12 +1,14 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { API_BASE_URL } from '../config/runtime'
+import { adminRequest, getApiError } from '../config/adminApi'
 
 type Tab = 'pending' | 'pending_follow_ups' | 'allqa' | 'messages' | 'contacts' | 'upload'
+type AuthState = 'checking' | 'anonymous' | 'authenticated'
 
 function Admin() {
   const [pwd, setPwd] = useState('')
-  const [authed, setAuthed] = useState(false)
+  const [authState, setAuthState] = useState<AuthState>('checking')
+  const [authMessage, setAuthMessage] = useState('')
   const [tab, setTab] = useState<Tab>('pending')
   const [pending, setPending] = useState<any[]>([])
   const [pendingFollowUps, setPendingFollowUps] = useState<any[]>([])
@@ -26,79 +28,197 @@ function Admin() {
 
   const toast_ = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2800) }
 
-  const api = (path: string) => `${API_BASE_URL}${path}?password=${encodeURIComponent(pwd)}`
-
-  const login = async () => {
-    setLoading(true)
-    try {
-      const r = await fetch(api('/qanda/questions/pending'))
-      if (r.ok) { setAuthed(true); setPending(await r.json()) }
-      else alert('密码错误')
-    } finally { setLoading(false) }
+  const clearAdminData = () => {
+    setPending([])
+    setPendingFollowUps([])
+    setAllQA([])
+    setContacts([])
+    setMsgs([])
   }
 
-  const fetchPendingFUs = async () => {
+  const handleResponse = async (response: Response, fallback: string) => {
+    if (response.status === 401) {
+      clearAdminData()
+      setAuthState('anonymous')
+      setAuthMessage('登录已过期，请重新登录')
+      void adminRequest('/admin/logout', { method: 'POST' }).catch(() => undefined)
+      return false
+    }
+    if (response.status === 403) {
+      toast_('当前身份无权执行此操作')
+      return false
+    }
+    if (!response.ok) {
+      toast_(await getApiError(response, fallback))
+      return false
+    }
+    return true
+  }
+
+  useEffect(() => {
+    let active = true
+    adminRequest('/admin/session')
+      .then(async response => {
+        if (!active) return
+        if (response.ok) {
+          setAuthState('authenticated')
+          const pendingResponse = await adminRequest('/qanda/questions/pending')
+          if (!active) return
+          if (pendingResponse.ok) {
+            setPending(await pendingResponse.json())
+          } else if (pendingResponse.status === 401) {
+            clearAdminData()
+            setAuthState('anonymous')
+            setAuthMessage('登录已过期，请重新登录')
+            void adminRequest('/admin/logout', { method: 'POST' }).catch(() => undefined)
+          } else {
+            toast_(await getApiError(pendingResponse, '待审核问答加载失败'))
+          }
+        } else {
+          setAuthState('anonymous')
+          if (response.status === 401) {
+            void adminRequest('/admin/logout', { method: 'POST' }).catch(() => undefined)
+          } else {
+            setAuthMessage(await getApiError(response, '会话检查失败'))
+          }
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAuthState('anonymous')
+          setAuthMessage('暂时无法连接服务器，请稍后重试')
+        }
+      })
+    return () => { active = false }
+  }, [])
+
+  const login = async () => {
+    if (!pwd) return
+    let loginSucceeded = false
+    setLoading(true)
+    setAuthMessage('')
     try {
-      const r = await fetch(api('/qanda/follow-ups/pending'))
-      if (r.ok) setPendingFollowUps(await r.json())
-    } catch {}
+      const response = await adminRequest('/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pwd }),
+      })
+      if (!response.ok) {
+        setAuthMessage(await getApiError(response, '登录失败，请稍后重试'))
+        return
+      }
+      loginSucceeded = true
+      setAuthState('authenticated')
+      const pendingResponse = await adminRequest('/qanda/questions/pending')
+      if (await handleResponse(pendingResponse, '待审核问答加载失败')) {
+        setPending(await pendingResponse.json())
+      }
+    } catch {
+      if (loginSucceeded) toast_('管理数据加载失败，请稍后重试')
+      else setAuthMessage('暂时无法连接服务器，请稍后重试')
+    } finally {
+      setPwd('')
+      setLoading(false)
+    }
+  }
+
+  const logout = async () => {
+    try {
+      const response = await adminRequest('/admin/logout', { method: 'POST' })
+      if (!response.ok) {
+        toast_(await getApiError(response, '退出失败，请稍后重试'))
+        return
+      }
+      clearAdminData()
+      setAuthState('anonymous')
+      setAuthMessage('已退出登录')
+    } catch {
+      toast_('退出失败，请检查网络后重试')
+    }
   }
 
   const fetchData = async (t: Tab) => {
     setTab(t)
     try {
+      let response: Response | null = null
       if (t === 'pending') {
-        const r = await fetch(api('/qanda/questions/pending'))
-        if (r.ok) setPending(await r.json())
+        response = await adminRequest('/qanda/questions/pending')
+        if (await handleResponse(response, '待审核问答加载失败')) setPending(await response.json())
       } else if (t === 'pending_follow_ups') {
-        fetchPendingFUs()
+        response = await adminRequest('/qanda/follow-ups/pending')
+        if (await handleResponse(response, '待审核追问加载失败')) setPendingFollowUps(await response.json())
       } else if (t === 'allqa') {
-        const r = await fetch(api('/qanda/admin/all'))
-        if (r.ok) setAllQA((await r.json()).questions)
+        response = await adminRequest('/qanda/admin/all')
+        if (await handleResponse(response, '全部问答加载失败')) setAllQA((await response.json()).questions)
       } else if (t === 'contacts') {
-        const r = await fetch(api('/contact/submissions'))
-        if (r.ok) setContacts(await r.json())
+        response = await adminRequest('/contact/submissions')
+        if (await handleResponse(response, '联系表单加载失败')) setContacts(await response.json())
       } else if (t === 'messages') {
-        // messages 不用密码也能读，但要用不同 URL
-        const r2 = await fetch(`${API_BASE_URL}/guestbook/messages?limit=100`)
-        if (r2.ok) setMsgs((await r2.json()).messages)
+        response = await adminRequest('/guestbook/messages?limit=100')
+        if (await handleResponse(response, '留言加载失败')) setMsgs((await response.json()).messages)
       }
-    } catch {}
+    } catch {
+      toast_('网络连接失败，请稍后重试')
+    }
   }
 
   const review = async (aid: number, s: string) => {
-    const r = await fetch(`${API_BASE_URL}/qanda/answers/${aid}/review`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: pwd, status: s }),
-    })
-    if (r.ok) { toast_(s === 'published' ? '已发布' : '已拒绝'); fetchData('pending') }
+    try {
+      const response = await adminRequest(`/qanda/answers/${aid}/review`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: s }),
+      })
+      if (await handleResponse(response, '审核失败')) {
+        toast_(s === 'published' ? '已发布' : '已拒绝')
+        void fetchData('pending')
+      }
+    } catch { toast_('网络连接失败，请稍后重试') }
   }
 
   const reviewFollowUp = async (fid: number, s: string) => {
-    const r = await fetch(`${API_BASE_URL}/qanda/follow-ups/${fid}/review`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: pwd, status: s }),
-    })
-    if (r.ok) { toast_(s === 'published' ? '已发布' : '已拒绝'); fetchData('pending_follow_ups') }
+    try {
+      const response = await adminRequest(`/qanda/follow-ups/${fid}/review`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: s }),
+      })
+      if (await handleResponse(response, '审核失败')) {
+        toast_(s === 'published' ? '已发布' : '已拒绝')
+        void fetchData('pending_follow_ups')
+      }
+    } catch { toast_('网络连接失败，请稍后重试') }
   }
 
   const deleteFollowUp = async (fid: number) => {
     if (!confirm('确定删除这条追问吗？')) return
-    await fetch(`${API_BASE_URL}/qanda/follow-ups/${fid}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
-    toast_('已删除')
-    fetchData('pending_follow_ups')
+    try {
+      const response = await adminRequest(`/qanda/follow-ups/${fid}`, { method: 'DELETE' })
+      if (await handleResponse(response, '删除失败')) {
+        toast_('已删除')
+        void fetchData('pending_follow_ups')
+      }
+    } catch { toast_('网络连接失败，请稍后重试') }
   }
 
   const deleteQA = async (qid: number) => {
     if (!confirm('确定要删除这条问答吗？')) return
-    const r = await fetch(`${API_BASE_URL}/qanda/questions/${qid}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
-    if (r.ok) { toast_('已删除'); fetchData(tab) }
+    try {
+      const response = await adminRequest(`/qanda/questions/${qid}`, { method: 'DELETE' })
+      if (await handleResponse(response, '删除失败')) {
+        toast_('已删除')
+        void fetchData(tab)
+      }
+    } catch { toast_('网络连接失败，请稍后重试') }
   }
 
   const deleteMsg = async (mid: number) => {
     if (!confirm('确定要删除这条留言吗？')) return
-    const r = await fetch(`${API_BASE_URL}/guestbook/messages/${mid}?password=${encodeURIComponent(pwd)}`, { method: 'DELETE' })
-    if (r.ok) { toast_('已删除'); fetchData('messages') }
+    try {
+      const response = await adminRequest(`/guestbook/messages/${mid}`, { method: 'DELETE' })
+      if (await handleResponse(response, '删除失败')) {
+        toast_('已删除')
+        void fetchData('messages')
+      }
+    } catch { toast_('网络连接失败，请稍后重试') }
   }
 
   const upload = async () => {
@@ -106,15 +226,24 @@ function Admin() {
     const fd = new FormData()
     fd.append('title', cwTitle); fd.append('date', cwDate)
     fd.append('description', cwDesc); fd.append('tags', cwTags); fd.append('file', cwFile)
-    const r = await fetch(`${API_BASE_URL}/courseware/upload`, { method: 'POST', body: fd })
-    if (r.ok) {
-      toast_('课件上传成功')
-      setCwTitle(''); setCwDate(''); setCwDesc(''); setCwTags(''); setCwFile(null)
-      if (fileRef.current) fileRef.current.value = ''
-    } else setCwMsg('上传失败')
+    try {
+      const response = await adminRequest('/courseware/upload', { method: 'POST', body: fd })
+      if (await handleResponse(response, '课件上传失败')) {
+        toast_('课件上传成功')
+        setCwMsg('')
+        setCwTitle(''); setCwDate(''); setCwDesc(''); setCwTags(''); setCwFile(null)
+        if (fileRef.current) fileRef.current.value = ''
+      }
+    } catch {
+      setCwMsg('网络连接失败，请稍后重试')
+    }
   }
 
-  if (!authed) {
+  if (authState === 'checking') {
+    return <div className="loading" />
+  }
+
+  if (authState === 'anonymous') {
     return (
       <div>
         <div className="page-header"><h1>管理员</h1></div>
@@ -129,6 +258,11 @@ function Admin() {
               style={{ width: '100%' }}>
               {loading ? '验证中…' : '登录'}
             </button>
+            {authMessage && (
+              <p style={{ marginTop: '12px', color: 'var(--accent-red)', fontSize: '0.85rem' }}>
+                {authMessage}
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -147,7 +281,10 @@ function Admin() {
   return (
     <div>
       {toast && <div className="toast toast-success">{toast}</div>}
-      <div className="page-header"><h1>管理后台</h1></div>
+      <div className="page-header">
+        <h1>管理后台</h1>
+        <button className="btn btn-outline btn-sm" onClick={logout}>退出登录</button>
+      </div>
       <div className="container">
         <div className="tab-bar" style={{ marginBottom: '28px' }}>
           {tabs.map(([k, l, count]) => (

@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from auth import AdminSession, require_admin
 from database import get_db
 
 router = APIRouter(prefix="/api/contact", tags=["contact"])
@@ -28,12 +29,10 @@ def submit_contact(data: ContactSubmit):
 
 
 @router.get("/submissions")
-def list_submissions(password: str):
+def list_submissions(
+    _admin: AdminSession = Depends(require_admin),
+):
     """管理员查看联系表单提交记录"""
-    from config import ADMIN_PASSWORD
-    if password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=403, detail="密码错误")
-
     conn = get_db()
     rows = conn.execute(
         "SELECT * FROM contact_submissions ORDER BY created_at DESC"

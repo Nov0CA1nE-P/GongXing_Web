@@ -1,6 +1,7 @@
 import os
 import shutil
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form
+from auth import AdminSession, require_admin
 from database import get_db
 from config import COURSEWARE_DIR, UPLOADS_DIR
 
@@ -48,6 +49,7 @@ def upload_courseware(
     description: str = Form(""),
     tags: str = Form(""),
     file: UploadFile = File(...),
+    _admin: AdminSession = Depends(require_admin),
 ):
     """上传新课件（管理员功能）"""
     if not file.filename.endswith(('.ppt', '.pptx', '.pdf')):
@@ -82,7 +84,10 @@ def upload_courseware(
 
 
 @router.delete("/{courseware_id}")
-def delete_courseware(courseware_id: int):
+def delete_courseware(
+    courseware_id: int,
+    _admin: AdminSession = Depends(require_admin),
+):
     """删除课件"""
     conn = get_db()
     row = conn.execute("SELECT * FROM courseware WHERE id = ?", (courseware_id,)).fetchone()

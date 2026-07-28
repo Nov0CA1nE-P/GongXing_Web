@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 import os
 
 from database import init_db
-from routes import courseware, guestbook, qanda, contact
+from routes import admin, contact, courseware, guestbook, qanda
 
 # 初始化数据库
 init_db()
@@ -25,6 +25,7 @@ app.add_middleware(
 )
 
 # 注册路由
+app.include_router(admin.router)
 app.include_router(courseware.router)
 app.include_router(guestbook.router)
 app.include_router(qanda.router)
