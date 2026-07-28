@@ -50,9 +50,12 @@ PPTX_MAIN_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument."
     "presentationml.presentation.main+xml"
 )
-_TEMP_NAME_RE = re.compile(
+_CLEANABLE_TEMP_NAME_RE = re.compile(
     r"^(?:\.upload-[0-9a-f]{32}\.part|"
     r"\.delete-[0-9a-f]{32}-[0-9]+\.delete)$"
+)
+_RECOVERY_HOLD_NAME_RE = re.compile(
+    r"^\.recover-[0-9a-f]{32}-[0-9]+\.hold$"
 )
 _UUID_FILE_RE = re.compile(r"^[0-9a-f]{32}\.(?:pdf|ppt|pptx)$")
 
@@ -352,7 +355,10 @@ def cleanup_stale_temporary_files(
         LOGGER.warning("无法检查课件临时目录，已跳过启动清理")
         return
     for entry in entries:
-        if not _TEMP_NAME_RE.fullmatch(entry.name):
+        # 恢复保留态可能是数据库失败后的唯一副本，永不自动清理。
+        if _RECOVERY_HOLD_NAME_RE.fullmatch(entry.name):
+            continue
+        if not _CLEANABLE_TEMP_NAME_RE.fullmatch(entry.name):
             continue
         try:
             if entry.is_symlink() or not entry.is_file():

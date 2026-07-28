@@ -148,7 +148,7 @@ def delete_courseware(
 ):
     """只删除允许上传目录内的课件文件和对应数据库记录。"""
     conn = get_db()
-    quarantined: list[tuple[Path, Path]] = []
+    quarantined: list[tuple[Path, Path, Path]] = []
     committed = False
     try:
         row = conn.execute(
@@ -187,11 +187,17 @@ def delete_courseware(
             raise HTTPException(status_code=500, detail="文件存储暂时不可用")
 
         for original in paths:
-            quarantine = temp_root / (
-                f".delete-{uuid.uuid4().hex}-{courseware_id}.delete"
+            quarantine_id = uuid.uuid4().hex
+            recovery_hold = temp_root / (
+                f".recover-{quarantine_id}-{courseware_id}.hold"
             )
-            os.replace(original, quarantine)
-            quarantined.append((original, quarantine))
+            cleanable_delete = temp_root / (
+                f".delete-{quarantine_id}-{courseware_id}.delete"
+            )
+            os.replace(original, recovery_hold)
+            quarantined.append(
+                (original, recovery_hold, cleanable_delete)
+            )
 
         conn.execute(
             "DELETE FROM courseware WHERE id = ?",
@@ -207,17 +213,28 @@ def delete_courseware(
         raise HTTPException(status_code=500, detail="课件删除失败") from exc
     finally:
         if not committed:
-            for original, quarantine in reversed(quarantined):
+            for original, recovery_hold, _ in reversed(quarantined):
                 try:
-                    if quarantine.exists() and not original.exists():
-                        os.replace(quarantine, original)
+                    if recovery_hold.exists() and not original.exists():
+                        os.replace(recovery_hold, original)
                 except OSError:
-                    LOGGER.error("未能恢复一个删除失败的课件文件")
+                    LOGGER.error(
+                        "课件删除失败且文件自动恢复失败，"
+                        "已保留一个人工恢复副本"
+                    )
         conn.close()
 
-    for _, quarantine in quarantined:
+    for _, recovery_hold, cleanable_delete in quarantined:
         try:
-            quarantine.unlink()
+            os.replace(recovery_hold, cleanable_delete)
         except OSError:
-            LOGGER.warning("未能清理一个已删除课件的隔离文件")
+            LOGGER.error(
+                "课件数据库记录已删除，但隔离文件状态转换失败，"
+                "已保留人工处理副本"
+            )
+            continue
+        try:
+            cleanable_delete.unlink()
+        except OSError:
+            LOGGER.warning("未能立即清理一个已确认删除的课件文件")
     return {"message": "删除成功"}

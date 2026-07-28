@@ -301,12 +301,20 @@ class TemporaryCleanupTests(unittest.TestCase):
             old_part = root / f".upload-{'a' * 32}.part"
             exact_part = root / f".upload-{'b' * 32}.part"
             recent_delete = root / f".delete-{'c' * 32}-1.delete"
+            old_recovery = root / f".recover-{'d' * 32}-1.hold"
             unrelated = root / ".upload-not-generated.part"
-            for path in (old_part, exact_part, recent_delete, unrelated):
+            for path in (
+                old_part,
+                exact_part,
+                recent_delete,
+                old_recovery,
+                unrelated,
+            ):
                 path.write_bytes(b"x")
             os.utime(old_part, (now - 86401, now - 86401))
             os.utime(exact_part, (now - 86400, now - 86400))
             os.utime(recent_delete, (now - 60, now - 60))
+            os.utime(old_recovery, (now - 90000, now - 90000))
             os.utime(unrelated, (now - 90000, now - 90000))
 
             cleanup_stale_temporary_files(temp_dir=root, now=now)
@@ -314,6 +322,7 @@ class TemporaryCleanupTests(unittest.TestCase):
             self.assertFalse(old_part.exists())
             self.assertTrue(exact_part.exists())
             self.assertTrue(recent_delete.exists())
+            self.assertTrue(old_recovery.exists())
             self.assertTrue(unrelated.exists())
 
     def test_cleanup_failure_does_not_escape(self):
@@ -634,6 +643,143 @@ class CoursewareRouteIntegrationTests(unittest.TestCase):
         ).fetchone()[0]
         conn.close()
         self.assertEqual(remaining, 1)
+
+    def test_commit_and_restore_failure_preserves_recovery_hold(self):
+        stored_file = self.uploads / "manual-recovery.pdf"
+        stored_file.write_bytes(valid_pdf())
+        conn = sqlite3.connect(self.database)
+        cursor = conn.execute(
+            "INSERT INTO courseware "
+            "(title, date, pdf_path, pptx_path) VALUES (?, ?, ?, ?)",
+            (
+                "manual recovery",
+                "2026-07-28",
+                "manual-recovery.pdf",
+                "",
+            ),
+        )
+        conn.commit()
+        item_id = cursor.lastrowid
+        conn.close()
+
+        class FailingConnection:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def execute(self, *args, **kwargs):
+                return self.connection.execute(*args, **kwargs)
+
+            def commit(self):
+                raise sqlite3.OperationalError("simulated")
+
+            def rollback(self):
+                self.connection.rollback()
+
+            def close(self):
+                self.connection.close()
+
+        def get_failing_db():
+            connection = sqlite3.connect(self.database)
+            connection.row_factory = sqlite3.Row
+            return FailingConnection(connection)
+
+        real_replace = os.replace
+
+        def replace_with_restore_failure(source, destination):
+            if (
+                Path(source).name.startswith(".recover-")
+                and Path(destination) == stored_file
+            ):
+                raise OSError("simulated restore failure")
+            return real_replace(source, destination)
+
+        with (
+            patch.object(
+                courseware_routes,
+                "get_db",
+                get_failing_db,
+            ),
+            patch.object(
+                courseware_routes.os,
+                "replace",
+                side_effect=replace_with_restore_failure,
+            ),
+        ):
+            response = self.client.delete(f"/api/courseware/{item_id}")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(stored_file.exists())
+        recovery_holds = list(self.temporary.glob(".recover-*.hold"))
+        self.assertEqual(len(recovery_holds), 1)
+        self.assertEqual(recovery_holds[0].read_bytes(), valid_pdf())
+        conn = sqlite3.connect(self.database)
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM courseware WHERE id = ?",
+            (item_id,),
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(remaining, 1)
+
+        old_time = time.time() - 90000
+        os.utime(recovery_holds[0], (old_time, old_time))
+        cleanup_stale_temporary_files(
+            temp_dir=self.temporary,
+            now=time.time(),
+        )
+        self.assertTrue(recovery_holds[0].exists())
+
+    def test_committed_delete_cleanup_failure_is_cleaned_later(self):
+        stored_file = self.uploads / "cleanup-later.pdf"
+        stored_file.write_bytes(valid_pdf())
+        conn = sqlite3.connect(self.database)
+        cursor = conn.execute(
+            "INSERT INTO courseware "
+            "(title, date, pdf_path, pptx_path) VALUES (?, ?, ?, ?)",
+            (
+                "cleanup later",
+                "2026-07-28",
+                "cleanup-later.pdf",
+                "",
+            ),
+        )
+        conn.commit()
+        item_id = cursor.lastrowid
+        conn.close()
+
+        real_unlink = Path.unlink
+
+        def fail_immediate_delete(path, *args, **kwargs):
+            if path.name.startswith(".delete-"):
+                raise OSError("simulated cleanup failure")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(
+            Path,
+            "unlink",
+            autospec=True,
+            side_effect=fail_immediate_delete,
+        ):
+            response = self.client.delete(f"/api/courseware/{item_id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(stored_file.exists())
+        cleanable_files = list(self.temporary.glob(".delete-*.delete"))
+        self.assertEqual(len(cleanable_files), 1)
+        conn = sqlite3.connect(self.database)
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM courseware WHERE id = ?",
+            (item_id,),
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(remaining, 0)
+
+        old_time = time.time() - 90000
+        os.utime(cleanable_files[0], (old_time, old_time))
+        cleanup_stale_temporary_files(
+            temp_dir=self.temporary,
+            now=time.time(),
+        )
+        self.assertFalse(cleanable_files[0].exists())
 
 
 if __name__ == "__main__":
