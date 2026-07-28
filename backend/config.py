@@ -48,6 +48,19 @@ if APP_ENV == "production" and not ADMIN_AUTH_CONFIGURED:
 
 ADMIN_COOKIE_SECURE = APP_ENV == "production"
 
+courseware_max_upload_setting = os.getenv("COURSEWARE_MAX_UPLOAD_MB", "50")
+try:
+    COURSEWARE_MAX_UPLOAD_MB = int(courseware_max_upload_setting)
+except ValueError as exc:
+    raise RuntimeError("COURSEWARE_MAX_UPLOAD_MB 必须是整数") from exc
+
+if not 1 <= COURSEWARE_MAX_UPLOAD_MB <= 500:
+    raise RuntimeError(
+        "COURSEWARE_MAX_UPLOAD_MB 必须介于 1 和 500 之间"
+    )
+
+COURSEWARE_MAX_UPLOAD_BYTES = COURSEWARE_MAX_UPLOAD_MB * 1024 * 1024
+
 # 相对数据库路径统一以项目根目录为基准，避免因启动目录不同而写入错误位置。
 database_path_setting = os.getenv("DATABASE_PATH", "data/site.db")
 if os.path.isabs(database_path_setting):
@@ -60,3 +73,4 @@ else:
 # 课件文件存储目录
 COURSEWARE_DIR = os.path.join(PROJECT_ROOT, "data", "courseware")
 UPLOADS_DIR = os.path.join(PROJECT_ROOT, "data", "uploads")
+COURSEWARE_TEMP_DIR = os.path.join(PROJECT_ROOT, "data", "tmp", "courseware")

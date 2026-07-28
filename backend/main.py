@@ -1,13 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-import os
 
 from database import init_db
-from routes import admin, contact, courseware, guestbook, qanda
+from file_storage import prepare_storage
+from routes import admin, contact, courseware, files, guestbook, qanda
 
 # 初始化数据库
 init_db()
+prepare_storage()
 
 app = FastAPI(
     title="躬行启杭 - 学军中学交流平台",
@@ -30,12 +30,7 @@ app.include_router(courseware.router)
 app.include_router(guestbook.router)
 app.include_router(qanda.router)
 app.include_router(contact.router)
-
-# 静态文件服务（课件PDF、上传文件）
-data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-os.makedirs(os.path.join(data_dir, "courseware"), exist_ok=True)
-os.makedirs(os.path.join(data_dir, "uploads"), exist_ok=True)
-app.mount("/data", StaticFiles(directory=data_dir), name="data")
+app.include_router(files.router)
 
 
 @app.get("/api/health")

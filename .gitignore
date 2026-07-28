@@ -8,4 +8,5 @@ data/*.db-wal
 data/*.db-shm
 data/uploads/
 data/courseware/
+data/tmp/
 .DS_Store

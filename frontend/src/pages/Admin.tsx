@@ -223,12 +223,17 @@ function Admin() {
 
   const upload = async () => {
     if (!cwTitle || !cwDate || !cwFile) return
+    setCwMsg('')
     const fd = new FormData()
     fd.append('title', cwTitle); fd.append('date', cwDate)
     fd.append('description', cwDesc); fd.append('tags', cwTags); fd.append('file', cwFile)
     try {
       const response = await adminRequest('/courseware/upload', { method: 'POST', body: fd })
-      if (await handleResponse(response, '课件上传失败')) {
+      if (response.status === 401 || response.status === 403) {
+        await handleResponse(response, '课件上传失败')
+      } else if (!response.ok) {
+        setCwMsg(await getApiError(response, '课件上传失败'))
+      } else {
         toast_('课件上传成功')
         setCwMsg('')
         setCwTitle(''); setCwDate(''); setCwDesc(''); setCwTags(''); setCwFile(null)
@@ -460,7 +465,7 @@ function Admin() {
             </div>
             <button className="btn btn-primary" onClick={upload}
               disabled={!cwTitle || !cwDate || !cwFile}>上传</button>
-            {cwMsg && <p style={{ marginTop: '12px', fontSize: '0.85rem', color: cwMsg.startsWith('上传失败') ? 'var(--accent-red)' : 'var(--accent-green)' }}>{cwMsg}</p>}
+            {cwMsg && <p style={{ marginTop: '12px', fontSize: '0.85rem', color: 'var(--accent-red)' }}>{cwMsg}</p>}
           </div>
         )}
       </div>
