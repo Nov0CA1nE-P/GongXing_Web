@@ -13,6 +13,7 @@ os.environ["APP_ENV"] = "test"
 os.environ["ADMIN_PASSWORD"] = "a-strong-test-password"
 os.environ["ADMIN_SESSION_TTL_SECONDS"] = "7200"
 os.environ["COURSEWARE_MAX_UPLOAD_MB"] = "50"
+os.environ["TRUSTED_ORIGINS"] = "https://test.example"
 os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -25,7 +26,7 @@ from starlette.datastructures import Headers, UploadFile
 import file_storage
 import routes.courseware as courseware_routes
 import routes.files as files_routes
-from auth import AdminSession, require_admin
+from auth import AdminSession, require_admin_write
 from file_storage import (
     UnsafeStoredPath,
     classify_stored_path,
@@ -434,9 +435,10 @@ class CoursewareRouteIntegrationTests(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(courseware_routes.router)
         self.app.include_router(files_routes.router)
-        self.app.dependency_overrides[require_admin] = lambda: AdminSession(
+        self.app.dependency_overrides[require_admin_write] = lambda: AdminSession(
             role="admin",
             expires_at=time.time() + 300,
+            csrf_token="test-csrf-token",
         )
         self.client = TestClient(self.app)
 
@@ -513,7 +515,7 @@ class CoursewareRouteIntegrationTests(unittest.TestCase):
         )
 
     def test_unauthenticated_upload_creates_nothing(self):
-        override = self.app.dependency_overrides.pop(require_admin)
+        override = self.app.dependency_overrides.pop(require_admin_write)
         try:
             response = self.client.post(
                 "/api/courseware/upload",
@@ -523,7 +525,7 @@ class CoursewareRouteIntegrationTests(unittest.TestCase):
                 },
             )
         finally:
-            self.app.dependency_overrides[require_admin] = override
+            self.app.dependency_overrides[require_admin_write] = override
         self.assertEqual(response.status_code, 401)
         self.assertEqual(list(self.uploads.iterdir()), [])
         conn = sqlite3.connect(self.database)

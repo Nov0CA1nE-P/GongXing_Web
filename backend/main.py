@@ -1,6 +1,7 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
+from config import CORS_ALLOWED_ORIGINS
+from cors_config import configure_cors
 from database import init_db
 from file_storage import prepare_storage
 from routes import admin, contact, courseware, files, guestbook, qanda
@@ -15,14 +16,8 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS 配置（允许前端开发服务器访问）
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 正式同域部署无需 CORS；仅在显式配置调试白名单时启用。
+configure_cors(app, CORS_ALLOWED_ORIGINS)
 
 # 注册路由
 app.include_router(admin.router)

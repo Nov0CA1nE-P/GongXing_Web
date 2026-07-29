@@ -2,7 +2,7 @@ import hashlib
 import secrets
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from fastapi import HTTPException, Request, Response
@@ -13,6 +13,7 @@ from config import (
     ADMIN_PASSWORD,
     ADMIN_SESSION_TTL_SECONDS,
 )
+from origin_security import require_csrf_token, require_trusted_source
 
 ADMIN_COOKIE_NAME = "admin_session"
 ADMIN_COOKIE_PATH = "/api"
@@ -22,6 +23,7 @@ ADMIN_COOKIE_PATH = "/api"
 class AdminSession:
     role: str
     expires_at: float
+    csrf_token: str = field(repr=False)
 
 
 class AdminSessionStore:
@@ -56,6 +58,7 @@ class AdminSessionStore:
         session = AdminSession(
             role=role,
             expires_at=now + self.ttl_seconds,
+            csrf_token=secrets.token_urlsafe(32),
         )
         with self._lock:
             self._cleanup_expired_locked(now)
@@ -128,4 +131,14 @@ def require_admin(request: Request, response: Response) -> AdminSession:
         raise HTTPException(status_code=403, detail="当前身份无权执行此操作")
 
     response.headers["Cache-Control"] = "no-store"
+    return session
+
+
+def require_admin_write(
+    request: Request,
+    response: Response,
+) -> AdminSession:
+    session = require_admin(request, response)
+    require_trusted_source(request)
+    require_csrf_token(request, session.csrf_token)
     return session

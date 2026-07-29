@@ -1,8 +1,28 @@
 import { API_BASE_URL } from './runtime'
 
+let csrfToken: string | null = null
+
+export function setAdminCsrfToken(token: unknown) {
+  csrfToken = typeof token === 'string' && token.length > 0 ? token : null
+}
+
+export function clearAdminCsrfToken() {
+  csrfToken = null
+}
+
 export function adminRequest(path: string, init: RequestInit = {}) {
+  const method = (init.method ?? 'GET').toUpperCase()
+  const headers = new Headers(init.headers)
+  if (
+    csrfToken
+    && path !== '/admin/login'
+    && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+  ) {
+    headers.set('X-CSRF-Token', csrfToken)
+  }
   return fetch(`${API_BASE_URL}${path}`, {
     ...init,
+    headers,
     credentials: 'same-origin',
     cache: 'no-store',
   })

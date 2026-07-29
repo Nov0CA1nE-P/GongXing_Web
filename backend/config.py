@@ -1,5 +1,9 @@
+import ipaddress
 import os
+from urllib.parse import urlsplit
+
 from dotenv import load_dotenv
+from origin_normalization import normalize_origin
 
 load_dotenv()
 
@@ -13,6 +17,70 @@ if APP_ENV not in {"development", "test", "production"}:
     raise RuntimeError(
         "APP_ENV 必须显式设置为 development、test 或 production"
     )
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _parse_origin_list(setting_name: str, *, required: bool) -> tuple[str, ...]:
+    raw_value = os.getenv(setting_name)
+    if raw_value is None or not raw_value.strip():
+        if required:
+            raise RuntimeError(f"{setting_name} 必须显式配置")
+        return ()
+
+    origins: list[str] = []
+    for raw_origin in raw_value.split(","):
+        candidate = raw_origin.strip()
+        if not candidate or candidate == "null" or "*" in candidate:
+            raise RuntimeError(f"{setting_name} 包含无效来源")
+        origin = normalize_origin(candidate)
+        if origin is None:
+            raise RuntimeError(f"{setting_name} 只允许精确的 HTTP(S) Origin")
+
+        hostname = urlsplit(origin).hostname
+        if hostname is None:
+            raise RuntimeError(f"{setting_name} 包含无效来源")
+        if APP_ENV == "production":
+            if (
+                not origin.startswith("https://")
+                or _is_loopback_host(hostname)
+            ):
+                raise RuntimeError(
+                    f"{setting_name} 在 production 中只允许 HTTPS 正式来源"
+                )
+        elif APP_ENV == "development":
+            if not _is_loopback_host(hostname):
+                raise RuntimeError(
+                    f"{setting_name} 在 development 中只允许回环来源"
+                )
+        elif (
+            origin.startswith("http://")
+            and not _is_loopback_host(hostname)
+        ):
+            raise RuntimeError(
+                f"{setting_name} 在 test 中的 HTTP 来源必须是回环地址"
+            )
+
+        if origin in origins:
+            raise RuntimeError(f"{setting_name} 不允许重复来源")
+        origins.append(origin)
+    return tuple(origins)
+
+
+TRUSTED_ORIGINS = _parse_origin_list("TRUSTED_ORIGINS", required=True)
+CORS_ALLOWED_ORIGINS = _parse_origin_list(
+    "CORS_ALLOWED_ORIGINS",
+    required=False,
+)
+if not set(CORS_ALLOWED_ORIGINS).issubset(TRUSTED_ORIGINS):
+    raise RuntimeError("CORS_ALLOWED_ORIGINS 必须是 TRUSTED_ORIGINS 的子集")
 
 admin_session_ttl_setting = os.getenv("ADMIN_SESSION_TTL_SECONDS", "7200")
 try:

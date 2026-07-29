@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from auth import AdminSession, require_admin
+from auth import AdminSession, require_admin, require_admin_write
 from database import get_db
 from services.ai_service import ask_deepseek
 
@@ -134,7 +134,7 @@ def list_pending(
 def review_answer(
     answer_id: int,
     review: AnswerReview,
-    _admin: AdminSession = Depends(require_admin),
+    _admin: AdminSession = Depends(require_admin_write),
 ):
     """管理员审核回答"""
     if review.status not in ("published", "rejected"):
@@ -164,7 +164,7 @@ def review_answer(
 @router.delete("/questions/{question_id}")
 def delete_question(
     question_id: int,
-    _admin: AdminSession = Depends(require_admin),
+    _admin: AdminSession = Depends(require_admin_write),
 ):
     """删除问题及关联回答"""
     conn = get_db()
@@ -362,7 +362,7 @@ def list_pending_follow_ups(
 def review_follow_up(
     follow_up_id: int,
     review: FollowUpReview,
-    _admin: AdminSession = Depends(require_admin),
+    _admin: AdminSession = Depends(require_admin_write),
 ):
     """管理员审核追问"""
     if review.status not in ("published", "rejected"):
@@ -381,7 +381,7 @@ def review_follow_up(
 @router.delete("/follow-ups/{follow_up_id}")
 def delete_follow_up(
     follow_up_id: int,
-    _admin: AdminSession = Depends(require_admin),
+    _admin: AdminSession = Depends(require_admin_write),
 ):
     """管理员删除追问"""
     conn = get_db()
