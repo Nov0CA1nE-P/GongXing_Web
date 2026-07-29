@@ -159,6 +159,49 @@ def serialize_courseware_row(row) -> dict:
     return result
 
 
+def public_pdf_filename(
+    row,
+    *,
+    uploads_dir: str | Path = UPLOADS_DIR,
+) -> str | None:
+    """返回可公开下载的 PDF 文件名；任何路径或文件异常都视为不可公开。"""
+    stored_value = dict(row).get("pdf_path", "")
+    if not stored_value:
+        return None
+    try:
+        filename = safe_stored_basename(stored_value)
+        if Path(filename).suffix.lower() != ".pdf":
+            return None
+        file_path = resolve_upload_path(
+            stored_value,
+            uploads_dir=uploads_dir,
+            require_exists=True,
+        )
+    except (UnsafeStoredPath, FileNotFoundError):
+        return None
+    if file_path.is_symlink() or not file_path.is_file():
+        return None
+    return filename
+
+
+def serialize_public_courseware_row(
+    row,
+    *,
+    uploads_dir: str | Path = UPLOADS_DIR,
+) -> dict | None:
+    filename = public_pdf_filename(row, uploads_dir=uploads_dir)
+    if filename is None:
+        return None
+    source = dict(row)
+    return {
+        "id": source["id"],
+        "title": source["title"],
+        "description": source.get("description", ""),
+        "tags": source.get("tags", ""),
+        "pdf_path": filename,
+    }
+
+
 def _read_limited(archive: zipfile.ZipFile, name: str, limit: int) -> bytes:
     with archive.open(name) as stream:
         data = stream.read(limit + 1)

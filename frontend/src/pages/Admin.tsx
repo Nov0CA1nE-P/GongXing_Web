@@ -7,12 +7,15 @@ import {
   setAdminCsrfToken,
 } from '../config/adminApi'
 import { loadJson } from '../config/listApi'
-import { isCoursewareList, type CoursewareItem } from '../types/courseware'
+import {
+  isAdminCoursewareList,
+  type AdminCoursewareItem,
+} from '../types/courseware'
 
 type Tab = 'pending' | 'pending_follow_ups' | 'allqa' | 'messages' | 'contacts' | 'upload'
 type AuthState = 'checking' | 'anonymous' | 'authenticated'
 
-function getCoursewareFile(item: CoursewareItem) {
+function getCoursewareFile(item: AdminCoursewareItem) {
   const fileName = item.pdf_path || item.pptx_path || ''
   const extension = fileName.split('.').pop()?.toUpperCase() || ''
   return {
@@ -21,6 +24,17 @@ function getCoursewareFile(item: CoursewareItem) {
       ? extension
       : '课件文件',
   }
+}
+
+function formatUtcTimestamp(value: unknown) {
+  if (typeof value !== 'string') return '时间异常'
+  const normalized = value.includes('T')
+    ? value
+    : `${value.replace(' ', 'T')}Z`
+  const parsed = new Date(normalized)
+  return Number.isNaN(parsed.getTime())
+    ? '时间异常'
+    : parsed.toLocaleString('zh-CN')
 }
 
 function Admin() {
@@ -38,18 +52,18 @@ function Admin() {
   const [toastError, setToastError] = useState(false)
 
   const [cwTitle, setCwTitle] = useState('')
-  const [cwDate, setCwDate] = useState('')
   const [cwDesc, setCwDesc] = useState('')
   const [cwTags, setCwTags] = useState('')
   const [cwFile, setCwFile] = useState<File | null>(null)
   const [cwMsg, setCwMsg] = useState('')
-  const [courseware, setCourseware] = useState<CoursewareItem[]>([])
+  const [courseware, setCourseware] = useState<AdminCoursewareItem[]>([])
   const [cwListLoading, setCwListLoading] = useState(false)
   const [cwListLoaded, setCwListLoaded] = useState(false)
   const [cwListError, setCwListError] = useState('')
   const [cwActionError, setCwActionError] = useState('')
   const [cwUploading, setCwUploading] = useState(false)
   const [deletingCoursewareId, setDeletingCoursewareId] = useState<number | null>(null)
+  const [deletingContactId, setDeletingContactId] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const coursewareRequestIdRef = useRef(0)
   const coursewareControllerRef = useRef<AbortController | null>(null)
@@ -74,6 +88,7 @@ function Admin() {
     setCwListError('')
     setCwActionError('')
     setDeletingCoursewareId(null)
+    setDeletingContactId(null)
   }
 
   const expireAdminSession = () => {
@@ -201,8 +216,8 @@ function Admin() {
 
     const result = await loadJson(
       {
-        request: signal => adminRequest('/courseware/list', { signal }),
-        validate: isCoursewareList,
+        request: signal => adminRequest('/courseware/admin/list', { signal }),
+        validate: isAdminCoursewareList,
         getHttpError: response => getApiError(
           response,
           '课件列表加载失败，请稍后重试',
@@ -324,7 +339,37 @@ function Admin() {
     } catch { toast_('网络连接失败，请稍后重试', true) }
   }
 
-  const deleteCourseware = async (item: CoursewareItem) => {
+  const deleteContact = async (contactId: number) => {
+    if (deletingContactId !== null) return
+    if (!confirm('确定删除这条联系记录吗？删除后无法从网站恢复。')) return
+    setDeletingContactId(contactId)
+    try {
+      const response = await adminRequest(`/contact/submissions/${contactId}`, {
+        method: 'DELETE',
+      })
+      if (response.status === 401 || response.status === 403) {
+        await handleResponse(response, '联系记录删除失败')
+        return
+      }
+      if (response.status === 404) {
+        setContacts(current => current.filter(contact => contact.id !== contactId))
+        toast_('该联系记录已经不存在，列表已更新', true)
+        return
+      }
+      if (!response.ok) {
+        toast_(await getApiError(response, '联系记录删除失败，请稍后重试'), true)
+        return
+      }
+      setContacts(current => current.filter(contact => contact.id !== contactId))
+      toast_('联系记录已删除')
+    } catch {
+      toast_('网络连接失败，删除结果未确认，请手动刷新', true)
+    } finally {
+      setDeletingContactId(current => current === contactId ? null : current)
+    }
+  }
+
+  const deleteCourseware = async (item: AdminCoursewareItem) => {
     if (deletingCoursewareId !== null) return
     if (!confirm(`确定删除课件“${item.title}”吗？删除后将无法从网站恢复。`)) return
 
@@ -363,12 +408,19 @@ function Admin() {
   }
 
   const upload = async () => {
-    if (!cwTitle || !cwDate || !cwFile || cwUploading) return
+    if (!cwTitle || !cwFile || cwUploading) return
+    if (
+      !cwFile.name.toLowerCase().endsWith('.pdf')
+      || cwFile.type !== 'application/pdf'
+    ) {
+      setCwMsg('V1 运营入口只接受浏览器识别为 PDF 的 .pdf 文件')
+      return
+    }
     setCwUploading(true)
     setCwMsg('')
     setCwActionError('')
     const fd = new FormData()
-    fd.append('title', cwTitle); fd.append('date', cwDate)
+    fd.append('title', cwTitle)
     fd.append('description', cwDesc); fd.append('tags', cwTags); fd.append('file', cwFile)
     try {
       const response = await adminRequest('/courseware/upload', { method: 'POST', body: fd })
@@ -378,7 +430,7 @@ function Admin() {
         setCwMsg(await getApiError(response, '课件上传失败'))
       } else {
         setCwMsg('')
-        setCwTitle(''); setCwDate(''); setCwDesc(''); setCwTags(''); setCwFile(null)
+        setCwTitle(''); setCwDesc(''); setCwTags(''); setCwFile(null)
         if (fileRef.current) fileRef.current.value = ''
         const refreshResult = await loadCourseware()
         if (refreshResult === 'failed') {
@@ -580,10 +632,19 @@ function Admin() {
               <div key={c.id} className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <span style={{ fontWeight: 600 }}>{c.name}</span>
-                  <span style={{ color: 'var(--text-tertiary)', fontSize: '0.76rem' }}>
-                    {new Date(c.created_at).toLocaleString('zh-CN')}
-                  </span>
+                  <button className="btn btn-danger btn-sm"
+                    disabled={deletingContactId !== null}
+                    onClick={() => void deleteContact(c.id)}>
+                    {deletingContactId === c.id ? '删除中…' : '删除'}
+                  </button>
                 </div>
+                <p style={{ color: 'var(--text-tertiary)', fontSize: '0.76rem', marginBottom: '8px' }}>
+                  提交：{formatUtcTimestamp(c.created_at)}
+                  {' · '}
+                  {c.retention_status === 'invalid_timestamp'
+                    ? '时间异常，需人工处理'
+                    : `预计到期：${formatUtcTimestamp(c.expires_at)}`}
+                </p>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.84rem', marginBottom: '8px' }}>
                   {c.contact_info || '未提供联系方式'}
                 </p>
@@ -602,20 +663,33 @@ function Admin() {
                 <input value={cwTitle} onChange={e => setCwTitle(e.target.value)} placeholder="课件标题" />
               </div>
               <div className="form-group">
-                <input type="date" value={cwDate} onChange={e => setCwDate(e.target.value)} />
-              </div>
-              <div className="form-group">
                 <input value={cwDesc} onChange={e => setCwDesc(e.target.value)} placeholder="简介（可选）" />
               </div>
               <div className="form-group">
                 <input value={cwTags} onChange={e => setCwTags(e.target.value)} placeholder="标签，用逗号分隔（如：机械,材料）" />
               </div>
               <div className="form-group">
-                <input type="file" accept=".ppt,.pptx,.pdf" ref={fileRef}
-                  onChange={e => setCwFile(e.target.files?.[0] || null)} />
+                <input type="file" accept=".pdf,application/pdf" ref={fileRef}
+                  onChange={e => {
+                    const file = e.target.files?.[0] || null
+                    if (
+                      file
+                      && (
+                        !file.name.toLowerCase().endsWith('.pdf')
+                        || file.type !== 'application/pdf'
+                      )
+                    ) {
+                      setCwFile(null)
+                      setCwMsg('V1 运营入口只接受浏览器识别为 PDF 的 .pdf 文件')
+                      e.currentTarget.value = ''
+                      return
+                    }
+                    setCwMsg('')
+                    setCwFile(file)
+                  }} />
               </div>
               <button className="btn btn-primary" onClick={upload}
-                disabled={!cwTitle || !cwDate || !cwFile || cwUploading}>
+                disabled={!cwTitle || !cwFile || cwUploading}>
                 {cwUploading ? '上传中…' : '上传'}
               </button>
               {cwMsg && <p style={{ marginTop: '12px', fontSize: '0.85rem', color: 'var(--accent-red)' }}>{cwMsg}</p>}
@@ -683,7 +757,7 @@ function Admin() {
                           <div className="admin-courseware-info">
                             <h3>{item.title}</h3>
                             <div className="admin-courseware-meta">
-                              <span className="tag">📅 {item.date}</span>
+                              <span className="tag">内部日期：{item.date}</span>
                               {item.tags?.split(/[,，]/).filter(Boolean).map(tag => (
                                 <span key={tag} className="tag">{tag.trim()}</span>
                               ))}
