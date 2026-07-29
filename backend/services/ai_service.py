@@ -1,6 +1,10 @@
 import httpx
 import json
-from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
+from config import (
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL,
+    DEEPSEEK_MAX_PROMPT_CHARS,
+)
 
 SYSTEM_PROMPT = """# 角色：躬行启杭智能大模型
 
@@ -77,6 +81,8 @@ SYSTEM_PROMPT = """# 角色：躬行启杭智能大模型
 
 async def ask_deepseek(question: str) -> str:
     """调用 DeepSeek API 回答问题"""
+    if len(SYSTEM_PROMPT) + len(question) > DEEPSEEK_MAX_PROMPT_CHARS:
+        raise ValueError("大模型请求上下文超过服务端字符上限")
     if not DEEPSEEK_API_KEY:
         return "API Key 未配置，请联系管理员。"
 

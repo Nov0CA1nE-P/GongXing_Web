@@ -1,5 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
+from abuse_protection import (
+    AI_GLOBAL_RULES,
+    consume_rules,
+    public_identity,
+    rule,
+    visitor_and_ip_rules,
+)
 from auth import AdminSession, require_admin, require_admin_write
 from database import get_db
 from services.ai_service import ask_deepseek
@@ -8,8 +15,10 @@ router = APIRouter(prefix="/api/qanda", tags=["qanda"])
 
 
 class QuestionCreate(BaseModel):
-    author: str = "匿名"
-    content: str
+    model_config = ConfigDict(extra="forbid")
+
+    author: str = Field(default="匿名", max_length=50)
+    content: str = Field(min_length=1, max_length=2000)
 
 
 class AnswerReview(BaseModel):
@@ -18,8 +27,10 @@ class AnswerReview(BaseModel):
 
 
 class FollowUpCreate(BaseModel):
-    author: str = "匿名"
-    content: str
+    model_config = ConfigDict(extra="forbid")
+
+    author: str = Field(default="匿名", max_length=50)
+    content: str = Field(min_length=1, max_length=1000)
 
 
 class FollowUpReview(BaseModel):
@@ -27,7 +38,10 @@ class FollowUpReview(BaseModel):
 
 
 @router.get("/questions")
-def list_questions(page: int = 1, limit: int = 20):
+def list_questions(
+    page: int = Query(default=1, ge=1, le=10000),
+    limit: int = Query(default=20, ge=1, le=100),
+):
     """获取公开问题列表，只返回已发布的问题。"""
     conn = get_db()
     offset = (page - 1) * limit
@@ -68,10 +82,19 @@ def list_questions(page: int = 1, limit: int = 20):
 
 
 @router.post("/questions")
-async def create_question(q: QuestionCreate):
+async def create_question(q: QuestionCreate, request: Request):
     """学生提交问题，自动触发AI回答"""
     if not q.content.strip():
         raise HTTPException(status_code=400, detail="问题内容不能为空")
+
+    identity = public_identity(request)
+    rules = visitor_and_ip_rules(
+        identity,
+        "qanda-question",
+        visitor_limits=((2, 3600), (5, 86400)),
+        ip_limits=((60, 3600), (150, 86400)),
+    )
+    consume_rules(rules + AI_GLOBAL_RULES)
 
     conn = get_db()
 
@@ -82,11 +105,13 @@ async def create_question(q: QuestionCreate):
     )
     question_id = cursor.lastrowid
     conn.commit()
+    conn.close()
 
     # 调用AI生成回答
     ai_answer = await ask_deepseek(q.content.strip())
 
     # 保存AI回答（状态为pending待审核）
+    conn = get_db()
     conn.execute(
         "INSERT INTO answers (question_id, content, is_ai_generated, status) VALUES (?, ?, 1, 'pending')",
         (question_id, ai_answer),
@@ -214,13 +239,31 @@ def admin_list_all(
 
 
 @router.post("/answers/{answer_id}/like")
-def like_answer(answer_id: int):
+def like_answer(answer_id: int, request: Request):
     """给回答点赞"""
     conn = get_db()
     answer = conn.execute("SELECT id, likes FROM answers WHERE id = ?", (answer_id,)).fetchone()
     if not answer:
         conn.close()
         raise HTTPException(status_code=404, detail="回答不存在")
+    conn.close()
+    identity = public_identity(request)
+    rules = visitor_and_ip_rules(
+        identity,
+        "qanda-like",
+        visitor_limits=((10, 3600), (50, 86400)),
+        ip_limits=((300, 3600), (1500, 86400)),
+    )
+    rules.append(
+        rule(
+            "qanda-like:target",
+            f"{identity.visitor_id}:{answer_id}",
+            1,
+            86400,
+        )
+    )
+    consume_rules(rules)
+    conn = get_db()
     conn.execute("UPDATE answers SET likes = likes + 1 WHERE id = ?", (answer_id,))
     conn.commit()
     new_likes = conn.execute("SELECT likes FROM answers WHERE id = ?", (answer_id,)).fetchone()["likes"]
@@ -248,13 +291,73 @@ def get_stats():
 
 
 class AnalyzeRequest(BaseModel):
-    prompt: str
+    model_config = ConfigDict(extra="forbid")
+
+    class Scores(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        science: int = Field(ge=8, le=32)
+        hands_on: int = Field(ge=8, le=32)
+        programming: int = Field(ge=8, le=32)
+        interpersonal: int = Field(ge=8, le=32)
+        creativity: int = Field(ge=8, le=32)
+        management: int = Field(ge=10, le=40)
+
+    scores: Scores
+
+
+PERSONALITY_DIMENSIONS = (
+    ("science", "数理思维", 32),
+    ("hands_on", "动手实践", 32),
+    ("programming", "编程与逻辑", 32),
+    ("interpersonal", "人际沟通", 32),
+    ("creativity", "创意表达", 32),
+    ("management", "商业与管理", 40),
+)
+
+
+def build_personality_prompt(scores: AnalyzeRequest.Scores) -> str:
+    percentages = [
+        (label, round(getattr(scores, key) / maximum * 100))
+        for key, label, maximum in PERSONALITY_DIMENSIONS
+    ]
+    ranking = sorted(percentages, key=lambda item: item[1], reverse=True)
+    score_text = "，".join(
+        f"{label}：{percentage}%" for label, percentage in percentages
+    )
+    top_text = "\n".join(
+        f"{index}. {label}（{percentage}%）"
+        for index, (label, percentage) in enumerate(ranking[:3], start=1)
+    )
+    return f"""以下是一个高中生完成专业性格测试后的六维度结果。
+
+【六维度得分】
+{score_text}
+
+【最突出的三个维度】
+{top_text}
+
+请以“躬行启杭智能大模型”的身份，用亲切的学长/学姐口吻生成分析：
+1. 用2-3句话概括性格特点和学习风格。
+2. 推荐3-5个专业方向，说明匹配原因、专业内容和未来方向。
+3. 给出2-3条大学学习与发展建议。
+4. 明确测试仅供参考，鼓励通过实践继续探索。
+
+使用 Markdown，直接称呼“你”，不要声称看到了测试题之外的信息。"""
 
 
 @router.post("/analyze-personality")
-async def analyze_personality(req: AnalyzeRequest):
+async def analyze_personality(req: AnalyzeRequest, request: Request):
     """调用 DeepSeek 分析性格测试结果"""
-    result = await ask_deepseek(req.prompt)
+    identity = public_identity(request)
+    rules = visitor_and_ip_rules(
+        identity,
+        "qanda-personality",
+        visitor_limits=((3, 3600), (6, 86400)),
+        ip_limits=((90, 3600), (180, 86400)),
+    )
+    consume_rules(rules + AI_GLOBAL_RULES)
+    result = await ask_deepseek(build_personality_prompt(req.scores))
     return {"result": result}
 
 
@@ -273,7 +376,11 @@ def list_follow_ups(question_id: int):
 
 
 @router.post("/questions/{question_id}/follow-ups")
-async def create_follow_up(question_id: int, req: FollowUpCreate):
+async def create_follow_up(
+    question_id: int,
+    req: FollowUpCreate,
+    request: Request,
+):
     """学生发起追问，AI 自动回答"""
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="内容不能为空")
@@ -292,17 +399,32 @@ async def create_follow_up(question_id: int, req: FollowUpCreate):
     ).fetchone()
 
     prev_follow_ups = conn.execute(
-        "SELECT content, answer_content FROM follow_ups WHERE question_id = ? AND status = 'published' ORDER BY created_at ASC",
+        """SELECT content, answer_content FROM follow_ups
+           WHERE question_id = ? AND status = 'published'
+           ORDER BY created_at DESC, id DESC LIMIT 5""",
         (question_id,),
     ).fetchall()
+    conn.close()
 
-    # 构建 AI 追问上下文
-    context = f"""【学生原始问题】{q['content']}
-【AI 原始回答】{answer['content'] if answer else '暂无'}"""
+    identity = public_identity(request)
+    rules = visitor_and_ip_rules(
+        identity,
+        "qanda-follow-up",
+        visitor_limits=((3, 3600), (8, 86400)),
+        ip_limits=((90, 3600), (240, 86400)),
+    )
+    consume_rules(rules + AI_GLOBAL_RULES)
+
+    # 只采用有上限的最近历史，并按时间正序呈现。
+    context = f"""【学生原始问题】{q['content'][:1000]}
+【AI 原始回答】{(answer['content'] if answer else '暂无')[:1500]}"""
     if prev_follow_ups:
         context += "\n\n【之前的追问对话】\n"
-        for i, fu in enumerate(prev_follow_ups):
-            context += f"追问{i+1}：{fu['content']}\n回答{i+1}：{fu['answer_content']}\n"
+        for i, fu in enumerate(reversed(prev_follow_ups)):
+            context += (
+                f"追问{i+1}：{(fu['content'] or '')[:300]}\n"
+                f"回答{i+1}：{(fu['answer_content'] or '')[:700]}\n"
+            )
 
     ai_prompt = f"""以下是一个高中生在专业问答区的追问。你需要结合之前的对话上下文来回答。
 
@@ -318,6 +440,7 @@ async def create_follow_up(question_id: int, req: FollowUpCreate):
 
     ai_answer = await ask_deepseek(ai_prompt)
 
+    conn = get_db()
     cursor = conn.execute(
         "INSERT INTO follow_ups (question_id, author, content, answer_content, status) VALUES (?, ?, ?, ?, 'pending')",
         (question_id, req.author.strip() or "匿名", req.content.strip(), ai_answer),

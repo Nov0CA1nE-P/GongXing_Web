@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { API_BASE_URL } from '../config/runtime'
+import { getPublicApiError, publicRequest } from '../config/publicApi'
 
 const MEMBERS = [
   { name: '待填写', major: '待填写', wechat: '待填写', intro: '团队成员介绍待补充', avatar: '' },
@@ -20,7 +20,7 @@ export default function Contact() {
     if (!name.trim() || !message.trim()) return
     setSubmitting(true); setMsg('')
     try {
-      const r = await fetch(`${API_BASE_URL}/contact/submit`, {
+      const r = await publicRequest('/contact/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), contact_info: contact.trim(), message: message.trim() }),
@@ -28,7 +28,9 @@ export default function Contact() {
       if (r.ok) {
         showToast('发送成功！我们会尽快联系你 ✨')
         setName(''); setContact(''); setMessage('')
-      } else setMsg('发送失败，请稍后再试')
+      } else setMsg(await getPublicApiError(r, '发送失败，请稍后再试'))
+    } catch {
+      setMsg('网络错误，请稍后再试')
     } finally { setSubmitting(false) }
   }
 

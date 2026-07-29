@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { API_BASE_URL } from '../config/runtime'
+import { getPublicApiError, publicRequest } from '../config/publicApi'
 
 interface QA {
   id: number; author: string; content: string; created_at: string
@@ -32,6 +33,7 @@ export default function QandA() {
   const [tab, setTab] = useState<'all' | 'my'>('all')
   const [myName, setMyName] = useState(localStorage.getItem('qa_author') || '')
   const [toast, setToast] = useState('')
+  const [toastError, setToastError] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [followUps, setFollowUps] = useState<Record<number, any[]>>({})
   const [followUpQ, setFollowUpQ] = useState<Record<number, string>>({})
@@ -49,14 +51,18 @@ export default function QandA() {
   }
   useEffect(fetchQ, [])
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2800) }
+  const showToast = (m: string, error = false) => {
+    setToastError(error)
+    setToast(m)
+    setTimeout(() => setToast(''), 2800)
+  }
 
   const submit = async () => {
     if (!content.trim()) return
     setSubmitting(true); setSubmitMsg('')
     try {
       const name = author.trim() || '匿名'
-      const r = await fetch(`${API_BASE_URL}/qanda/questions`, {
+      const r = await publicRequest('/qanda/questions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ author: name, content: content.trim() }),
       })
@@ -65,7 +71,9 @@ export default function QandA() {
         setContent(''); setMyName(name); setTab('my')
         localStorage.setItem('qa_author', name)
         showToast('已提交 ✨')
-      } else setSubmitMsg('提交失败，请稍后再试。')
+      } else setSubmitMsg(await getPublicApiError(r, '提交失败，请稍后再试。'))
+    } catch {
+      setSubmitMsg('网络错误，请稍后再试。')
     } finally { setSubmitting(false) }
   }
 
@@ -88,27 +96,41 @@ export default function QandA() {
     setSubmittingFollowUp(prev => ({ ...prev, [qid]: true }))
     try {
       const name = followUpAuthor[qid]?.trim() || '匿名'
-      await fetch(`${API_BASE_URL}/qanda/questions/${qid}/follow-ups`, {
+      const response = await publicRequest(`/qanda/questions/${qid}/follow-ups`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ author: name, content: text.trim() }),
       })
+      if (!response.ok) {
+        showToast(
+          await getPublicApiError(response, '追问提交失败，请稍后再试'),
+          true,
+        )
+        return
+      }
       setFollowUpQ(prev => ({ ...prev, [qid]: '' }))
       setFollowUpAuthor(prev => ({ ...prev, [qid]: '' }))
       showToast('追问已提交，审核通过后可见 ✨')
-    } catch {}
-    setSubmittingFollowUp(prev => ({ ...prev, [qid]: false }))
+    } catch {
+      showToast('网络错误，请稍后再试', true)
+    } finally {
+      setSubmittingFollowUp(prev => ({ ...prev, [qid]: false }))
+    }
   }
 
   const doLike = async (answerId: number) => {
     if (likedIds.includes(answerId)) return
     try {
-      const r = await fetch(`${API_BASE_URL}/qanda/answers/${answerId}/like`, { method: 'POST' })
+      const r = await publicRequest(`/qanda/answers/${answerId}/like`, { method: 'POST' })
       if (r.ok) {
         const data = await r.json()
         setLikedIds(prev => { const n = [...prev, answerId]; localStorage.setItem('qa_liked', JSON.stringify(n)); return n })
         setQuestions(prev => prev.map(q => q.answer?.id === answerId ? { ...q, answer: { ...q.answer!, likes: data.likes } } : q))
+      } else {
+        showToast(await getPublicApiError(r, '点赞失败，请稍后再试'), true)
       }
-    } catch {}
+    } catch {
+      showToast('网络错误，请稍后再试', true)
+    }
   }
 
   const viewed = getViewed()
@@ -141,7 +163,7 @@ export default function QandA() {
 
   return (
     <div>
-      {toast && <div className="toast toast-success">{toast}</div>}
+      {toast && <div className={`toast ${toastError ? 'toast-error' : 'toast-success'}`}>{toast}</div>}
 
       <div className="page-header">
         <h1>专业问答</h1>

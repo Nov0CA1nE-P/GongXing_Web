@@ -22,6 +22,8 @@ class ConfigValidationTests(unittest.TestCase):
             "COURSEWARE_MAX_UPLOAD_MB",
             "TRUSTED_ORIGINS",
             "CORS_ALLOWED_ORIGINS",
+            "RATE_LIMIT_MAX_BUCKETS",
+            "TRUSTED_PROXY_IPS",
         ):
             env.pop(name, None)
         env.update(settings)
@@ -100,6 +102,7 @@ class ConfigValidationTests(unittest.TestCase):
                         ADMIN_PASSWORD=password,
                         ADMIN_SESSION_TTL_SECONDS="7200",
                         TRUSTED_ORIGINS="https://example.com",
+                        TRUSTED_PROXY_IPS="127.0.0.1",
                     ).returncode,
                     0,
                 )
@@ -110,8 +113,70 @@ class ConfigValidationTests(unittest.TestCase):
             ADMIN_PASSWORD="a-production-password-strong-enough",
             ADMIN_SESSION_TTL_SECONDS="7200",
             TRUSTED_ORIGINS="https://example.com",
+            TRUSTED_PROXY_IPS="127.0.0.1",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rate_limit_bucket_capacity_is_validated(self):
+        base = {
+            "APP_ENV": "test",
+            "ADMIN_PASSWORD": "a-strong-test-password",
+            "TRUSTED_ORIGINS": "https://test.example",
+        }
+        for value in ("not-an-integer", "999", "100001"):
+            with self.subTest(value=value):
+                self.assertNotEqual(
+                    self.import_config(
+                        **base,
+                        RATE_LIMIT_MAX_BUCKETS=value,
+                    ).returncode,
+                    0,
+                )
+        for value in ("1000", "100000"):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    self.import_config(
+                        **base,
+                        RATE_LIMIT_MAX_BUCKETS=value,
+                    ).returncode,
+                    0,
+                )
+
+    def test_trusted_proxy_configuration_is_strict(self):
+        production = {
+            "APP_ENV": "production",
+            "ADMIN_PASSWORD": "a-production-password-strong-enough",
+            "TRUSTED_ORIGINS": "https://example.com",
+        }
+        self.assertNotEqual(
+            self.import_config(**production).returncode,
+            0,
+        )
+        for value in ("*", "127.0.0.0/8", "nginx", "127.0.0.1,127.0.0.1"):
+            with self.subTest(value=value):
+                self.assertNotEqual(
+                    self.import_config(
+                        **production,
+                        TRUSTED_PROXY_IPS=value,
+                    ).returncode,
+                    0,
+                )
+        self.assertEqual(
+            self.import_config(
+                **production,
+                TRUSTED_PROXY_IPS="127.0.0.1,::1",
+            ).returncode,
+            0,
+        )
+        self.assertNotEqual(
+            self.import_config(
+                APP_ENV="test",
+                ADMIN_PASSWORD="a-strong-test-password",
+                TRUSTED_ORIGINS="https://test.example",
+                TRUSTED_PROXY_IPS="127.0.0.1",
+            ).returncode,
+            0,
+        )
 
     def test_courseware_upload_limit_must_be_integer_within_bounds(self):
         base = {
