@@ -225,6 +225,24 @@ a { color: var(--blue); text-decoration: none; }
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+.list-feedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--cream-dark);
+  color: var(--ink-light);
+  font-size: 0.86rem;
+}
+.list-feedback-error {
+  border-color: rgba(201, 74, 74, 0.28);
+  background: rgba(201, 74, 74, 0.06);
+  color: #A83E3E;
+}
 
 /* ─── Markdown ─── */
 .markdown-body {
@@ -286,6 +304,77 @@ a { color: var(--blue); text-decoration: none; }
   box-shadow: 0 2px 8px rgba(61, 50, 38, 0.08);
 }
 .tab-btn:hover:not(.active) { color: var(--ink); }
+
+/* ─── 问答筛选工具栏 ─── */
+.qanda-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+.qanda-list-tabs {
+  flex: 0 0 auto;
+  width: auto;
+}
+.qanda-list-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 320px;
+}
+
+/* ─── 后台课件管理 ─── */
+.admin-courseware-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 36px 0 18px;
+}
+.admin-courseware-heading h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.admin-courseware-heading p {
+  color: var(--ink-lighter);
+  font-size: 0.82rem;
+}
+.admin-courseware-list {
+  display: grid;
+  gap: 14px;
+}
+.admin-courseware-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 0;
+}
+.admin-courseware-info { min-width: 0; }
+.admin-courseware-info h3 {
+  font-size: 0.98rem;
+  font-weight: 650;
+  margin-bottom: 10px;
+}
+.admin-courseware-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.admin-courseware-file {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--ink-lighter);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+.admin-courseware-file strong { color: var(--ink-light); }
 
 /* ─── Badge ─── */
 .badge {
@@ -378,4 +467,28 @@ a { color: var(--blue); text-decoration: none; }
 @media (max-width: 480px) {
   .page-header h1 { font-size: 1.5rem; }
   .navbar .nav-links a { font-size: 0.74rem; padding: 5px 7px; }
+  .qanda-list-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .qanda-list-tabs {
+    flex: 0 0 auto;
+    width: 100%;
+    margin-bottom: 0;
+  }
+  .qanda-list-search { max-width: none; }
+  .list-feedback {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .list-feedback .btn { width: 100%; }
+  .admin-courseware-heading,
+  .admin-courseware-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .admin-courseware-heading .btn,
+  .admin-courseware-item .btn {
+    width: 100%;
+  }
 }

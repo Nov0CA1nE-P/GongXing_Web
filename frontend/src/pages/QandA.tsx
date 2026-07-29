@@ -1,11 +1,44 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { API_BASE_URL } from '../config/runtime'
 import { getPublicApiError, publicRequest } from '../config/publicApi'
+import { loadJson } from '../config/listApi'
 
 interface QA {
   id: number; author: string; content: string; created_at: string
-  answer?: { id: number; content: string; status: string; likes: number }
+  answer?: { id: number; content: string; status?: string; likes: number }
+}
+
+interface QuestionPage { questions: QA[] }
+
+function isAnswer(value: unknown): value is NonNullable<QA['answer']> {
+  if (!value || typeof value !== 'object') return false
+  const answer = value as Record<string, unknown>
+  return (
+    Number.isInteger(answer.id)
+    && typeof answer.content === 'string'
+    && typeof answer.likes === 'number'
+    && Number.isFinite(answer.likes)
+    && (answer.status === undefined || typeof answer.status === 'string')
+  )
+}
+
+function isQuestion(value: unknown): value is QA {
+  if (!value || typeof value !== 'object') return false
+  const question = value as Record<string, unknown>
+  return (
+    Number.isInteger(question.id)
+    && typeof question.author === 'string'
+    && typeof question.content === 'string'
+    && typeof question.created_at === 'string'
+    && (question.answer === undefined || isAnswer(question.answer))
+  )
+}
+
+function isQuestionPage(value: unknown): value is QuestionPage {
+  if (!value || typeof value !== 'object') return false
+  const page = value as Record<string, unknown>
+  return Array.isArray(page.questions) && page.questions.every(isQuestion)
 }
 
 const getViewed = (): number[] => {
@@ -25,6 +58,8 @@ function extractKeywords(text: string): string[] {
 export default function QandA() {
   const [questions, setQuestions] = useState<QA[]>([])
   const [loading, setLoading] = useState(true)
+  const [hasLoaded, setHasLoaded] = useState(false)
+  const [listError, setListError] = useState('')
   const [author, setAuthor] = useState('')
   const [content, setContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -42,14 +77,57 @@ export default function QandA() {
   const [likedIds, setLikedIds] = useState<number[]>(() => {
     try { return JSON.parse(localStorage.getItem('qa_liked') || '[]') } catch { return [] }
   })
+  const requestIdRef = useRef(0)
+  const requestControllerRef = useRef<AbortController | null>(null)
 
-  const fetchQ = () => {
-    fetch(`${API_BASE_URL}/qanda/questions`)
-      .then(r => r.json())
-      .then(d => { setQuestions(d.questions); setLoading(false) })
-      .catch(() => setLoading(false))
+  const fetchQ = async (): Promise<'success' | 'failed' | 'ignored'> => {
+    const requestId = requestIdRef.current + 1
+    requestIdRef.current = requestId
+    requestControllerRef.current?.abort()
+    const controller = new AbortController()
+    requestControllerRef.current = controller
+    setLoading(true)
+    setListError('')
+
+    const result = await loadJson(
+      {
+        request: signal => publicRequest('/qanda/questions', { signal }),
+        validate: isQuestionPage,
+        getHttpError: response => getPublicApiError(
+          response,
+          '问答服务暂时不可用，请稍后重试',
+        ),
+        invalidMessage: '服务器返回的问答数据格式异常，请稍后重试',
+        networkMessage: '无法连接问答服务，请检查网络后重试',
+      },
+      controller.signal,
+    )
+
+    if (
+      requestId !== requestIdRef.current
+      || (!result.ok && result.kind === 'aborted')
+    ) {
+      return 'ignored'
+    }
+
+    if (result.ok) {
+      setQuestions(result.data.questions)
+      setHasLoaded(true)
+      setLoading(false)
+      return 'success'
+    }
+
+    setListError(result.message)
+    setLoading(false)
+    return 'failed'
   }
-  useEffect(fetchQ, [])
+  useEffect(() => {
+    void fetchQ()
+    return () => {
+      requestIdRef.current += 1
+      requestControllerRef.current?.abort()
+    }
+  }, [])
 
   const showToast = (m: string, error = false) => {
     setToastError(error)
@@ -159,8 +237,6 @@ export default function QandA() {
       .slice(0, 3)
   }, [expandedId, questions])
 
-  if (loading) return <div className="loading" />
-
   return (
     <div>
       {toast && <div className={`toast ${toastError ? 'toast-error' : 'toast-success'}`}>{toast}</div>}
@@ -194,26 +270,59 @@ export default function QandA() {
         </div>
 
         {/* 标签 + 搜索 */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', flexWrap: 'wrap', gap: '14px' }}>
-          <div className="tab-bar" style={{ width: 'auto', flex: 0 }}>
+        <div className="qanda-list-toolbar">
+          <div className="tab-bar qanda-list-tabs">
             <button className={`tab-btn ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>全部问答</button>
             <button className={`tab-btn ${tab === 'my' ? 'active' : ''}`} onClick={() => setTab('my')}>我的提问</button>
           </div>
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="🔍 搜索问答" style={{ width: '100%', maxWidth: '220px', padding: '8px 16px', border: '1.5px solid var(--border)', borderRadius: '24px', fontSize: '0.84rem', background: 'var(--paper)' }} />
+          <div className="qanda-list-search">
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="🔍 搜索问答" style={{ width: '100%', padding: '8px 16px', border: '1.5px solid var(--border)', borderRadius: '24px', fontSize: '0.84rem', background: 'var(--paper)' }} />
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => void fetchQ()}
+              disabled={loading}
+            >
+              {loading ? '刷新中…' : '刷新'}
+            </button>
+          </div>
         </div>
 
         {/* 列表 */}
-        {filtered.length === 0 ? (
-          <div className="empty">
-            <div style={{ fontSize: '3rem', marginBottom: '12px' }}>{search ? '🔍' : tab === 'my' ? '📝' : '🤔'}</div>
-            <p style={{ fontWeight: 600 }}>{search ? '没有匹配的结果' : tab === 'my' ? '你还没有提问' : '暂无已发布的问答'}</p>
-          </div>
+        {!hasLoaded ? (
+          loading ? (
+            <div className="loading" />
+          ) : (
+            <div className="list-feedback list-feedback-error">
+              <p>{listError}</p>
+              <button className="btn btn-outline btn-sm" onClick={() => void fetchQ()}>
+                重新加载
+              </button>
+            </div>
+          )
         ) : (
-          filtered.map(q => {
-            const isNew = !viewed.includes(q.id) && !!q.answer
-            const isExpanded = expandedId === q.id
-            return (
+          <>
+            {(listError || loading) && (
+              <div className={`list-feedback ${listError ? 'list-feedback-error' : ''}`}>
+                <p>{listError || '正在刷新问答列表…'}</p>
+                {listError && (
+                  <button className="btn btn-outline btn-sm" onClick={() => void fetchQ()}>
+                    重试
+                  </button>
+                )}
+              </div>
+            )}
+
+            {filtered.length === 0 ? (
+              <div className="empty">
+                <div style={{ fontSize: '3rem', marginBottom: '12px' }}>{search ? '🔍' : tab === 'my' ? '📝' : '🤔'}</div>
+                <p style={{ fontWeight: 600 }}>{search ? '没有匹配的结果' : tab === 'my' ? '你还没有提问' : '暂无已发布的问答'}</p>
+              </div>
+            ) : (
+              filtered.map(q => {
+                const isNew = !viewed.includes(q.id) && !!q.answer
+                const isExpanded = expandedId === q.id
+                return (
               <div key={q.id} className="card" onClick={() => { if (isNew) markViewed(q.id); setExpandedId(isExpanded ? null : q.id); if (!isExpanded) loadFollowUps(q.id) }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
                   <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--green-light), var(--green-glow))', color: 'var(--green)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.78rem', fontWeight: 700 }}>
@@ -341,8 +450,10 @@ export default function QandA() {
                   </div>
                 )}
               </div>
-            )
-          })
+                )
+              })
+            )}
+          </>
         )}
       </div>
     </div>
