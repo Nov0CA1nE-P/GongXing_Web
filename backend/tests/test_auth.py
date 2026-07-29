@@ -444,6 +444,7 @@ class ProtectedEndpointTests(unittest.TestCase):
                 },
             ),
             ("delete", "/api/courseware/1", {}),
+            ("get", "/api/courseware/admin/list", {}),
             ("get", "/api/qanda/questions/pending", {}),
             (
                 "put",
@@ -461,6 +462,7 @@ class ProtectedEndpointTests(unittest.TestCase):
             ("delete", "/api/qanda/follow-ups/1", {}),
             ("delete", "/api/guestbook/messages/1", {}),
             ("get", "/api/contact/submissions", {}),
+            ("delete", "/api/contact/submissions/1", {}),
         ]
         for method, path, kwargs in requests:
             with self.subTest(method=method, path=path):
@@ -480,6 +482,7 @@ class ProtectedEndpointTests(unittest.TestCase):
                 },
             ),
             ("delete", "/api/courseware/1", {}),
+            ("delete", "/api/contact/submissions/1", {}),
             (
                 "put",
                 "/api/qanda/answers/1/review",
