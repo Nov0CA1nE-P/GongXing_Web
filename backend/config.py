@@ -11,6 +11,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MAX_PROMPT_CHARS = 16000
 
 APP_ENV = os.getenv("APP_ENV")
 if APP_ENV not in {"development", "test", "production"}:
@@ -115,6 +116,50 @@ if APP_ENV == "production" and not ADMIN_AUTH_CONFIGURED:
     )
 
 ADMIN_COOKIE_SECURE = APP_ENV == "production"
+
+rate_limit_max_buckets_setting = os.getenv("RATE_LIMIT_MAX_BUCKETS", "20000")
+try:
+    RATE_LIMIT_MAX_BUCKETS = int(rate_limit_max_buckets_setting)
+except ValueError as exc:
+    raise RuntimeError("RATE_LIMIT_MAX_BUCKETS 必须是整数") from exc
+
+if not 1000 <= RATE_LIMIT_MAX_BUCKETS <= 100000:
+    raise RuntimeError(
+        "RATE_LIMIT_MAX_BUCKETS 必须介于 1000 和 100000 之间"
+    )
+
+
+def _parse_trusted_proxy_ips() -> tuple[str, ...]:
+    raw_value = os.getenv("TRUSTED_PROXY_IPS", "")
+    if APP_ENV != "production":
+        if raw_value.strip():
+            raise RuntimeError(
+                "development 和 test 环境必须关闭代理头且不得配置 TRUSTED_PROXY_IPS"
+            )
+        return ()
+
+    if not raw_value.strip():
+        raise RuntimeError("production 环境必须显式配置 TRUSTED_PROXY_IPS")
+
+    addresses: list[str] = []
+    for raw_address in raw_value.split(","):
+        candidate = raw_address.strip()
+        if not candidate or candidate == "*" or "/" in candidate:
+            raise RuntimeError("TRUSTED_PROXY_IPS 只允许精确 IP 地址")
+        try:
+            address = ipaddress.ip_address(candidate).compressed
+        except ValueError as exc:
+            raise RuntimeError(
+                "TRUSTED_PROXY_IPS 只允许精确 IP 地址"
+            ) from exc
+        if address in addresses:
+            raise RuntimeError("TRUSTED_PROXY_IPS 不允许重复地址")
+        addresses.append(address)
+    return tuple(addresses)
+
+
+TRUSTED_PROXY_IPS = _parse_trusted_proxy_ips()
+UVICORN_PROXY_HEADERS = APP_ENV == "production"
 
 courseware_max_upload_setting = os.getenv("COURSEWARE_MAX_UPLOAD_MB", "50")
 try:

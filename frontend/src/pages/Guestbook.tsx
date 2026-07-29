@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_BASE_URL } from '../config/runtime'
+import { getPublicApiError, publicRequest } from '../config/publicApi'
 
 interface Reply { id: number; author: string; content: string; created_at: string; reactions: string }
 interface Msg { id: number; author: string; content: string; created_at: string; replies: Reply[]; reactions: string }
@@ -16,6 +17,7 @@ export default function Guestbook() {
   const [rAuthor, setRAuthor] = useState('')
   const [rContent, setRContent] = useState('')
   const [toast, setToast] = useState('')
+  const [toastError, setToastError] = useState(false)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
 
@@ -27,7 +29,11 @@ export default function Guestbook() {
   }
   useEffect(() => { fetchMsgs() }, [])
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2800) }
+  const showToast = (m: string, error = false) => {
+    setToastError(error)
+    setToast(m)
+    setTimeout(() => setToast(''), 2800)
+  }
 
   const submit = async (pid: number | null = null) => {
     const text = pid ? rContent : content
@@ -35,15 +41,24 @@ export default function Guestbook() {
     setSubmitting(true)
     try {
       const name = pid ? (rAuthor.trim() || '匿名') : (author.trim() || '匿名')
-      await fetch(`${API_BASE_URL}/guestbook/messages`, {
+      const response = await publicRequest('/guestbook/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ author: name, content: text.trim(), parent_id: pid }),
       })
+      if (!response.ok) {
+        showToast(
+          await getPublicApiError(response, '留言失败，请稍后再试'),
+          true,
+        )
+        return
+      }
       if (pid) { setReplyTo(null); setRContent(''); setRAuthor('') }
       else { setContent(''); setAuthor('') }
       fetchMsgs(page)
       showToast('留言成功 ✨')
+    } catch {
+      showToast('网络错误，请稍后再试', true)
     } finally { setSubmitting(false) }
   }
 
@@ -53,7 +68,7 @@ export default function Guestbook() {
 
   return (
     <div>
-      {toast && <div className="toast toast-success">{toast}</div>}
+      {toast && <div className={`toast ${toastError ? 'toast-error' : 'toast-success'}`}>{toast}</div>}
 
       <div className="page-header">
         <h1>留言板</h1>
@@ -129,6 +144,7 @@ export default function Guestbook() {
                   msgId={m.id}
                   reactions={m.reactions}
                   onReacted={() => fetchMsgs(page)}
+                  onError={message => showToast(message, true)}
                 />
 
                 {/* 回复 */}
@@ -211,7 +227,12 @@ export default function Guestbook() {
 }
 
 // 表情反应组件
-function ReactionBar({ msgId, reactions, onReacted }: { msgId: number; reactions: string; onReacted: () => void }) {
+function ReactionBar({ msgId, reactions, onReacted, onError }: {
+  msgId: number
+  reactions: string
+  onReacted: () => void
+  onError: (message: string) => void
+}) {
   const [loading, setLoading] = useState(false)
   const parsed: Record<string, number> = (() => { try { return JSON.parse(reactions || '{}') } catch { return {} } })()
 
@@ -219,10 +240,20 @@ function ReactionBar({ msgId, reactions, onReacted }: { msgId: number; reactions
     if (loading) return
     setLoading(true)
     try {
-      await fetch(`${API_BASE_URL}/guestbook/messages/${msgId}/react?emoji=${encodeURIComponent(emoji)}`, { method: 'POST' })
+      const response = await publicRequest(
+        `/guestbook/messages/${msgId}/react?emoji=${encodeURIComponent(emoji)}`,
+        { method: 'POST' },
+      )
+      if (!response.ok) {
+        onError(await getPublicApiError(response, '表情操作失败，请稍后再试'))
+        return
+      }
       onReacted()
-    } catch {}
-    setLoading(false)
+    } catch {
+      onError('网络错误，请稍后再试')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (

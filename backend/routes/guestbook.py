@@ -1,5 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
+from abuse_protection import (
+    consume_rules,
+    public_identity,
+    rule,
+    visitor_and_ip_rules,
+)
 from auth import AdminSession, require_admin_write
 from database import get_db
 
@@ -7,13 +13,18 @@ router = APIRouter(prefix="/api/guestbook", tags=["guestbook"])
 
 
 class MessageCreate(BaseModel):
-    author: str = "匿名"
-    content: str
+    model_config = ConfigDict(extra="forbid")
+
+    author: str = Field(default="匿名", max_length=50)
+    content: str = Field(min_length=1, max_length=2000)
     parent_id: int | None = None
 
 
 @router.get("/messages")
-def list_messages(page: int = 1, limit: int = 20):
+def list_messages(
+    page: int = Query(default=1, ge=1, le=10000),
+    limit: int = Query(default=20, ge=1, le=100),
+):
     """获取留言列表（分页），只返回顶级留言"""
     conn = get_db()
     offset = (page - 1) * limit
@@ -45,22 +56,39 @@ def list_messages(page: int = 1, limit: int = 20):
 
 
 @router.post("/messages")
-def create_message(msg: MessageCreate):
+def create_message(msg: MessageCreate, request: Request):
     """发表留言或回复"""
     if not msg.content.strip():
         raise HTTPException(status_code=400, detail="内容不能为空")
 
-    conn = get_db()
-
     # 如果是回复，检查父留言是否存在
     if msg.parent_id:
+        conn = get_db()
         parent = conn.execute(
             "SELECT id FROM messages WHERE id = ?", (msg.parent_id,)
         ).fetchone()
+        conn.close()
         if not parent:
-            conn.close()
             raise HTTPException(status_code=404, detail="父留言不存在")
 
+    identity = public_identity(request)
+    if msg.parent_id is None:
+        rules = visitor_and_ip_rules(
+            identity,
+            "guestbook-message",
+            visitor_limits=((5, 600), (20, 86400)),
+            ip_limits=((150, 600), (600, 86400)),
+        )
+    else:
+        rules = visitor_and_ip_rules(
+            identity,
+            "guestbook-reply",
+            visitor_limits=((10, 600), (40, 86400)),
+            ip_limits=((300, 600), (1200, 86400)),
+        )
+    consume_rules(rules)
+
+    conn = get_db()
     cursor = conn.execute(
         "INSERT INTO messages (author, content, parent_id) VALUES (?, ?, ?)",
         (msg.author.strip() or "匿名", msg.content.strip(), msg.parent_id),
@@ -86,7 +114,7 @@ def delete_message(
 
 
 @router.post("/messages/{message_id}/react")
-def react_to_message(message_id: int, emoji: str = "👍"):
+def react_to_message(message_id: int, request: Request, emoji: str = "👍"):
     """给留言添加表情反应"""
     import json
     valid_emojis = ["👍", "❤️", "😄", "🎉", "😢", "🔥", "💡", "👏"]
@@ -95,6 +123,33 @@ def react_to_message(message_id: int, emoji: str = "👍"):
 
     conn = get_db()
     msg = conn.execute("SELECT id, reactions FROM messages WHERE id = ?", (message_id,)).fetchone()
+    if not msg:
+        conn.close()
+        raise HTTPException(status_code=404, detail="留言不存在")
+    conn.close()
+
+    identity = public_identity(request)
+    rules = visitor_and_ip_rules(
+        identity,
+        "guestbook-reaction",
+        visitor_limits=((30, 60), (300, 86400)),
+        ip_limits=((300, 60), (3000, 86400)),
+    )
+    rules.append(
+        rule(
+            "guestbook-reaction:target",
+            f"{identity.visitor_id}:{message_id}:{emoji}",
+            2,
+            3600,
+        )
+    )
+    consume_rules(rules)
+
+    conn = get_db()
+    msg = conn.execute(
+        "SELECT id, reactions FROM messages WHERE id = ?",
+        (message_id,),
+    ).fetchone()
     if not msg:
         conn.close()
         raise HTTPException(status_code=404, detail="留言不存在")

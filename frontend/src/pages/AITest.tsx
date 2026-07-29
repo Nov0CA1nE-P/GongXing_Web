@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
-import { API_BASE_URL } from '../config/runtime'
+import { getPublicApiError, publicRequest } from '../config/publicApi'
 
 // 50道测试题，分为6个维度
 interface Question {
@@ -110,58 +110,26 @@ export default function AITest() {
       scores[q.dimension] = (scores[q.dimension] || 0) + (ans[i] || 1)
     })
 
-    // 构建用户画像
-    const top3 = Object.entries(scores).sort((a, b) => b[1] - a[1]).slice(0, 3)
-    const profile = top3.map(([dim, score], i) => {
-      const info = DIMENSIONS[dim]
-      const maxScore = questions.filter(q => q.dimension === dim).length * 4
-      const pct = Math.round((score / maxScore) * 100)
-      return `第${i + 1}名：${info.icon} ${info.label}（得分${pct}%），相关专业方向：${info.majors.join('、')}`
-    }).join('\n')
-
-    const allScoresText = Object.entries(scores).map(([dim, score]) => {
-      const maxScore = questions.filter(q => q.dimension === dim).length * 4
-      return `${DIMENSIONS[dim].icon} ${DIMENSIONS[dim].label}: ${Math.round((score / maxScore) * 100)}%`
-    }).join('，')
-
-    const prompt = `以下是一个高中生做的专业性格测试结果。请根据结果给出个性化的专业推荐和分析。
-
-【六维度得分】（百分比越高越突出）
-${allScoresText}
-
-【最突出的三个维度】
-${profile}
-
-请你作为"躬行启杭智能大模型"，为这位高中生做以下分析：
-
-## 你的性格画像
-用2-3句话概括 ta 的性格特点和学习风格
-
-## 推荐专业方向（3-5个，按匹配度排序）
-每个专业写清楚：
-- 为什么适合 ta（结合得分数据）
-- 这个专业是做什么的（一句话）
-- 未来可以做什么
-
-## 大学期间的建议
-给2-3条实用的大学学习和发展建议
-
-## 温馨提醒
-告诉 ta 测试只是参考，真正的兴趣需要在实践中发现。鼓励 ta 继续探索。
-
-请用亲切的"学长学姐"口吻，直接称呼"你"，不要说"这位同学"。Markdown 格式输出。`
-
     try {
-      const r = await fetch(`${API_BASE_URL}/qanda/analyze-personality`, {
+      const r = await publicRequest('/qanda/analyze-personality', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({
+          scores: {
+            science: scores['理科'],
+            hands_on: scores['动手'],
+            programming: scores['编程'],
+            interpersonal: scores['人际'],
+            creativity: scores['创意'],
+            management: scores['管理'],
+          },
+        }),
       })
       if (r.ok) {
         const data = await r.json()
         setResult(data.result)
       } else {
-        setResult('分析服务暂时不可用，请稍后再试。')
+        setResult(await getPublicApiError(r, '分析服务暂时不可用，请稍后再试。'))
       }
     } catch {
       setResult('网络错误，请稍后再试。')
