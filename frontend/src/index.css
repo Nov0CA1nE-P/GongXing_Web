@@ -305,6 +305,27 @@ a { color: var(--blue); text-decoration: none; }
 }
 .tab-btn:hover:not(.active) { color: var(--ink); }
 
+/* ─── 问答筛选工具栏 ─── */
+.qanda-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+.qanda-list-tabs {
+  flex: 0 0 auto;
+  width: auto;
+}
+.qanda-list-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 320px;
+}
+
 /* ─── 后台课件管理 ─── */
 .admin-courseware-heading {
   display: flex;
@@ -446,6 +467,16 @@ a { color: var(--blue); text-decoration: none; }
 @media (max-width: 480px) {
   .page-header h1 { font-size: 1.5rem; }
   .navbar .nav-links a { font-size: 0.74rem; padding: 5px 7px; }
+  .qanda-list-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .qanda-list-tabs {
+    flex: 0 0 auto;
+    width: 100%;
+    margin-bottom: 0;
+  }
+  .qanda-list-search { max-width: none; }
   .list-feedback {
     align-items: stretch;
     flex-direction: column;

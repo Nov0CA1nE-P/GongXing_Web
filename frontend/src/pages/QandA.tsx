@@ -270,12 +270,12 @@ export default function QandA() {
         </div>
 
         {/* 标签 + 搜索 */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', flexWrap: 'wrap', gap: '14px' }}>
-          <div className="tab-bar" style={{ width: 'auto', flex: 0 }}>
+        <div className="qanda-list-toolbar">
+          <div className="tab-bar qanda-list-tabs">
             <button className={`tab-btn ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>全部问答</button>
             <button className={`tab-btn ${tab === 'my' ? 'active' : ''}`} onClick={() => setTab('my')}>我的提问</button>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', maxWidth: '320px' }}>
+          <div className="qanda-list-search">
             <input value={search} onChange={e => setSearch(e.target.value)}
               placeholder="🔍 搜索问答" style={{ width: '100%', padding: '8px 16px', border: '1.5px solid var(--border)', borderRadius: '24px', fontSize: '0.84rem', background: 'var(--paper)' }} />
             <button
