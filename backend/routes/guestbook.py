@@ -17,7 +17,7 @@ class MessageCreate(BaseModel):
 
     author: str = Field(default="匿名", max_length=50)
     content: str = Field(min_length=1, max_length=2000)
-    parent_id: int | None = None
+    parent_id: int | None = Field(default=None, ge=1)
 
 
 @router.get("/messages")
@@ -62,7 +62,7 @@ def create_message(msg: MessageCreate, request: Request):
         raise HTTPException(status_code=400, detail="内容不能为空")
 
     # 如果是回复，检查父留言是否存在
-    if msg.parent_id:
+    if msg.parent_id is not None:
         conn = get_db()
         parent = conn.execute(
             "SELECT id FROM messages WHERE id = ?", (msg.parent_id,)

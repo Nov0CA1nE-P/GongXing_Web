@@ -359,6 +359,113 @@ class PublicRouteIntegrationTests(unittest.TestCase):
         self.assertEqual(blocked.headers["retry-after"], "3600")
         self.assertEqual(blocked.headers["cache-control"], "no-store")
 
+    def test_parent_id_boundaries_do_not_consume_or_write(self):
+        for parent_id in (0, -1):
+            with self.subTest(parent_id=parent_id):
+                self.client.cookies.clear()
+                response = self.client.post(
+                    "/api/guestbook/messages",
+                    json={
+                        "author": "学生",
+                        "content": "回复",
+                        "parent_id": parent_id,
+                    },
+                )
+                self.assertEqual(response.status_code, 422)
+                self.assertIn("visitor_rl=", response.headers["set-cookie"])
+
+        self.client.cookies.clear()
+        missing = self.client.post(
+            "/api/guestbook/messages",
+            json={
+                "author": "学生",
+                "content": "回复",
+                "parent_id": 999999,
+            },
+        )
+        self.assertEqual(missing.status_code, 404)
+        self.assertIn("visitor_rl=", missing.headers["set-cookie"])
+
+        conn = self.get_test_db()
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+            0,
+        )
+        conn.close()
+        self.assertEqual(self.limiter.bucket_count(), 0)
+
+    def test_400_404_and_422_do_not_consume_message_quota(self):
+        invalid_responses = [
+            self.client.post(
+                "/api/guestbook/messages",
+                json={
+                    "author": "学生",
+                    "content": "   ",
+                    "parent_id": None,
+                },
+            ),
+            self.client.post(
+                "/api/guestbook/messages",
+                json={
+                    "author": "学生",
+                    "content": "回复",
+                    "parent_id": 999999,
+                },
+            ),
+            self.client.post(
+                "/api/guestbook/messages",
+                json={
+                    "author": "学生",
+                    "content": "回复",
+                    "parent_id": 0,
+                },
+            ),
+        ]
+        self.assertEqual(
+            [response.status_code for response in invalid_responses],
+            [400, 404, 422],
+        )
+
+        payload = {
+            "author": "学生",
+            "content": "合法留言",
+            "parent_id": None,
+        }
+        statuses = [
+            self.client.post(
+                "/api/guestbook/messages",
+                json=payload,
+            ).status_code
+            for _ in range(6)
+        ]
+        self.assertEqual(statuses, [200, 200, 200, 200, 200, 429])
+
+    def test_rotated_or_missing_cookie_cannot_bypass_ip_limit(self):
+        payload = {"name": "学生", "contact_info": "", "message": "咨询"}
+        statuses = []
+        for index in range(61):
+            self.client.cookies.clear()
+            headers = {}
+            if index % 2:
+                headers["Cookie"] = "visitor_rl=v1.invalid.invalid"
+            response = self.client.post(
+                "/api/contact/submit",
+                json=payload,
+                headers=headers,
+            )
+            self.assertIn("visitor_rl=", response.headers["set-cookie"])
+            statuses.append(response.status_code)
+        self.assertEqual(statuses, [200] * 60 + [429])
+
+        conn = self.get_test_db()
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM contact_submissions"
+            ).fetchone()[0],
+            60,
+        )
+        conn.close()
+
     def test_invalid_pagination_never_calls_database(self):
         invalid_queries = (
             "page=0",
@@ -519,6 +626,149 @@ class PublicRouteIntegrationTests(unittest.TestCase):
                 for _ in range(4)
             ]
             self.assertEqual(statuses, [200, 200, 200, 429])
+
+    def test_three_ai_routes_share_global_minute_limit(self):
+        for _ in range(37):
+            self.assertTrue(
+                self.limiter.consume_many(
+                    [abuse_protection.AI_GLOBAL_RULES[0]]
+                ).allowed
+            )
+
+        conn = self.get_test_db()
+        question_id = conn.execute(
+            "INSERT INTO questions (author, content) VALUES ('学生', '原问题')"
+        ).lastrowid
+        conn.execute(
+            """INSERT INTO answers
+               (question_id, content, status)
+               VALUES (?, '原回答', 'published')""",
+            (question_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        scores = {
+            "scores": {
+                "science": 24,
+                "hands_on": 25,
+                "programming": 30,
+                "interpersonal": 20,
+                "creativity": 26,
+                "management": 31,
+            }
+        }
+        fake_ai = AsyncMock(return_value="AI回答")
+        with patch.object(qanda_routes, "ask_deepseek", fake_ai):
+            question = self.client.post(
+                "/api/qanda/questions",
+                json={"author": "学生", "content": "新问题"},
+            )
+            follow_up = self.client.post(
+                f"/api/qanda/questions/{question_id}/follow-ups",
+                json={"author": "学生", "content": "追问"},
+            )
+            personality = self.client.post(
+                "/api/qanda/analyze-personality",
+                json=scores,
+            )
+            self.assertEqual(
+                [
+                    question.status_code,
+                    follow_up.status_code,
+                    personality.status_code,
+                ],
+                [200, 200, 200],
+            )
+
+            conn = self.get_test_db()
+            before = (
+                conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM answers").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM follow_ups").fetchone()[0],
+            )
+            conn.close()
+            blocked = self.client.post(
+                "/api/qanda/questions",
+                json={"author": "学生", "content": "不会写入的问题"},
+            )
+
+        self.assertEqual(blocked.status_code, 429)
+        self.assertEqual(fake_ai.await_count, 3)
+        conn = self.get_test_db()
+        after = (
+            conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM answers").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM follow_ups").fetchone()[0],
+        )
+        conn.close()
+        self.assertEqual(after, before)
+
+    def test_downstream_failures_consume_exactly_once(self):
+        visitor_id, visitor_cookie = (
+            abuse_protection.visitor_identity_manager.create()
+        )
+        self.assertIsNotNone(visitor_id)
+        safe_client = TestClient(
+            self.app,
+            raise_server_exceptions=False,
+        )
+        safe_client.cookies.set(
+            "visitor_rl",
+            visitor_cookie,
+            path="/api",
+        )
+        payload = {"name": "学生", "contact_info": "", "message": "咨询"}
+        with patch.object(
+            contact_routes,
+            "get_db",
+            side_effect=RuntimeError("模拟数据库失败"),
+        ):
+            failed = safe_client.post("/api/contact/submit", json=payload)
+        self.assertEqual(failed.status_code, 500)
+        self.assertEqual(
+            [
+                safe_client.post(
+                    "/api/contact/submit",
+                    json=payload,
+                ).status_code
+                for _ in range(3)
+            ],
+            [200, 200, 429],
+        )
+        safe_client.close()
+
+        _, ai_cookie = abuse_protection.visitor_identity_manager.create()
+        ai_client = TestClient(
+            self.app,
+            raise_server_exceptions=False,
+        )
+        ai_client.cookies.set("visitor_rl", ai_cookie, path="/api")
+        with patch.object(
+            qanda_routes,
+            "ask_deepseek",
+            AsyncMock(side_effect=RuntimeError("模拟 AI 失败")),
+        ):
+            ai_failed = ai_client.post(
+                "/api/qanda/questions",
+                json={"author": "学生", "content": "失败问题"},
+            )
+        self.assertEqual(ai_failed.status_code, 500)
+        with patch.object(
+            qanda_routes,
+            "ask_deepseek",
+            AsyncMock(return_value="成功回答"),
+        ):
+            second = ai_client.post(
+                "/api/qanda/questions",
+                json={"author": "学生", "content": "成功问题"},
+            )
+            third = ai_client.post(
+                "/api/qanda/questions",
+                json={"author": "学生", "content": "被限流问题"},
+            )
+        self.assertEqual([second.status_code, third.status_code], [200, 429])
+        ai_client.close()
 
     def test_follow_up_uses_only_five_bounded_recent_records(self):
         conn = self.get_test_db()

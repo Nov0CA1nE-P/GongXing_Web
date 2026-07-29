@@ -88,6 +88,7 @@ export default function AITest() {
   const [finished, setFinished] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [result, setResult] = useState('')
+  const [analysisError, setAnalysisError] = useState('')
 
   const handleAnswer = (score: number) => {
     const newAnswers = { ...answers, [current]: score }
@@ -102,8 +103,12 @@ export default function AITest() {
 
   const goBack = () => { if (current > 0) setCurrent(current - 1) }
 
-  const analyzeResults = async (ans: Record<number, number>) => {
+  const analyzeResults = async (
+    ans: Record<number, number>,
+    retry = false,
+  ) => {
     setAnalyzing(true)
+    if (!retry) setAnalysisError('')
     // 计算各维度得分
     const scores: Record<string, number> = {}
     questions.forEach((q, i) => {
@@ -128,13 +133,26 @@ export default function AITest() {
       if (r.ok) {
         const data = await r.json()
         setResult(data.result)
+        setAnalysisError('')
       } else {
-        setResult(await getPublicApiError(r, '分析服务暂时不可用，请稍后再试。'))
+        setAnalysisError(
+          await getPublicApiError(r, '分析服务暂时不可用，请稍后再试。'),
+        )
       }
     } catch {
-      setResult('网络错误，请稍后再试。')
+      setAnalysisError('网络错误，请稍后再试。')
     }
     setAnalyzing(false)
+  }
+
+  const restartTest = () => {
+    setStarted(true)
+    setCurrent(0)
+    setAnswers({})
+    setFinished(false)
+    setAnalyzing(false)
+    setResult('')
+    setAnalysisError('')
   }
 
   const totalQuestions = questions.length
@@ -181,12 +199,49 @@ export default function AITest() {
     )
   }
 
-  if (analyzing) {
+  if (analyzing && !analysisError) {
     return (
       <div className="container" style={{ maxWidth: '600px', textAlign: 'center', paddingTop: '80px' }}>
         <div className="loading">
           <p style={{ fontSize: '1.2rem', fontWeight: 600 }}>AI 正在分析你的性格特点...</p>
           <p style={{ color: 'var(--ink-lighter)', fontSize: '0.85rem' }}>请稍等片刻</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (finished && analysisError) {
+    return (
+      <div>
+        <div className="page-header">
+          <h1>🧠 分析暂未完成</h1>
+          <p>你的 50 道题答案已经保留，无需重新作答</p>
+        </div>
+        <div className="container" style={{ maxWidth: '620px' }}>
+          <div className="card" style={{ padding: '32px', textAlign: 'center' }}>
+            <p style={{ color: '#C94A4A', marginBottom: '20px' }}>
+              {analysisError}
+            </p>
+            <div style={{
+              display: 'flex', gap: '12px', justifyContent: 'center',
+              flexWrap: 'wrap',
+            }}>
+              <button
+                className="btn btn-primary"
+                disabled={analyzing}
+                onClick={() => analyzeResults(answers, true)}
+              >
+                {analyzing ? '重新分析中…' : '重新分析'}
+              </button>
+              <button
+                className="btn btn-outline"
+                disabled={analyzing}
+                onClick={restartTest}
+              >
+                重新测试
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     )
@@ -205,7 +260,7 @@ export default function AITest() {
               <ReactMarkdown>{result}</ReactMarkdown>
             </div>
             <div style={{ textAlign: 'center', marginTop: '28px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
-              <button className="btn btn-outline" onClick={() => { setStarted(true); setCurrent(0); setAnswers({}); setFinished(false); setResult('') }}>
+              <button className="btn btn-outline" onClick={restartTest}>
                 重新测试
               </button>
               <Link to="/explore" className="btn btn-primary">

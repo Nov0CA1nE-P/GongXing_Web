@@ -105,11 +105,13 @@ async def create_question(q: QuestionCreate, request: Request):
     )
     question_id = cursor.lastrowid
     conn.commit()
+    conn.close()
 
     # 调用AI生成回答
     ai_answer = await ask_deepseek(q.content.strip())
 
     # 保存AI回答（状态为pending待审核）
+    conn = get_db()
     conn.execute(
         "INSERT INTO answers (question_id, content, is_ai_generated, status) VALUES (?, ?, 1, 'pending')",
         (question_id, ai_answer),
