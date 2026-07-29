@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import Headers, UploadFile
 
 import file_storage
+import database as database_module
 import routes.courseware as courseware_routes
 import routes.files as files_routes
 import routes.qanda as qanda_routes
@@ -34,6 +35,7 @@ from file_storage import (
     cleanup_stale_temporary_files,
     resolve_upload_path,
     serialize_courseware_row,
+    public_pdf_filename,
     store_validated_upload,
 )
 
@@ -73,23 +75,9 @@ def upload_file(name: str, content: bytes, content_type: str) -> UploadFile:
 
 
 def create_database(path: Path) -> None:
-    conn = sqlite3.connect(path)
-    conn.execute(
-        """
-        CREATE TABLE courseware (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            date TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            tags TEXT DEFAULT '',
-            pdf_path TEXT DEFAULT '',
-            pptx_path TEXT DEFAULT '',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
+    # 复用真实初始化逻辑，但强制指向隔离临时数据库。
+    with patch.object(database_module, "DATABASE_PATH", str(path)):
+        database_module.init_db()
 
 
 class PathCompatibilityTests(unittest.TestCase):
@@ -153,6 +141,64 @@ class PathCompatibilityTests(unittest.TestCase):
                         uploads_dir=root,
                         require_exists=True,
                     )
+
+
+class PublicPdfSignatureTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_context = tempfile.TemporaryDirectory()
+        self.uploads = Path(self.temp_context.name)
+        self.row = {
+            "id": 1,
+            "title": "PDF",
+            "description": "",
+            "tags": "测试",
+            "pdf_path": "document.pdf",
+        }
+
+    def tearDown(self):
+        self.temp_context.cleanup()
+
+    def test_empty_and_unreadable_pdf_are_not_public(self):
+        target = self.uploads / "document.pdf"
+        target.write_bytes(b"")
+        self.assertIsNone(
+            public_pdf_filename(self.row, uploads_dir=self.uploads)
+        )
+
+        target.write_bytes(valid_pdf())
+        original_open = Path.open
+
+        def fail_target_open(path, *args, **kwargs):
+            if path == target:
+                raise PermissionError("simulated")
+            return original_open(path, *args, **kwargs)
+
+        with patch.object(
+            Path,
+            "open",
+            autospec=True,
+            side_effect=fail_target_open,
+        ):
+            self.assertIsNone(
+                public_pdf_filename(self.row, uploads_dir=self.uploads)
+            )
+
+    def test_file_disappearing_after_signature_check_is_not_public(self):
+        target = self.uploads / "document.pdf"
+        target.write_bytes(valid_pdf())
+
+        def remove_after_check(path):
+            path.unlink()
+            return True
+
+        with patch.object(
+            file_storage,
+            "has_pdf_content_signature",
+            side_effect=remove_after_check,
+        ):
+            self.assertIsNone(
+                public_pdf_filename(self.row, uploads_dir=self.uploads)
+            )
 
 
 class UploadValidationTests(unittest.IsolatedAsyncioTestCase):
@@ -413,6 +459,33 @@ class DownloadRouteTests(unittest.TestCase):
             404,
         )
 
+    def test_pdf_disappearing_after_public_check_returns_404(self):
+        target = self.uploads / "disappearing.pdf"
+        target.write_bytes(valid_pdf())
+        conn = sqlite3.connect(self.database)
+        conn.execute(
+            "INSERT INTO courseware "
+            "(title, date, pdf_path) VALUES (?, ?, ?)",
+            ("disappearing", "2026-07-29", target.name),
+        )
+        conn.commit()
+        conn.close()
+
+        def remove_after_public_check(_row, *, uploads_dir):
+            self.assertEqual(Path(uploads_dir), self.uploads)
+            target.unlink()
+            return target.name
+
+        with patch.object(
+            files_routes,
+            "public_pdf_filename",
+            side_effect=remove_after_public_check,
+        ):
+            response = self.client.get(
+                f"/data/uploads/{target.name}"
+            )
+        self.assertEqual(response.status_code, 404)
+
     def test_internal_and_unsafe_paths_are_not_exposed(self):
         internal = Path(self.temp_context.name) / "site.db"
         internal.write_bytes(b"secret")
@@ -452,6 +525,8 @@ class CoursewareRouteIntegrationTests(unittest.TestCase):
             patch.object(courseware_routes, "get_db", get_test_db),
             patch.object(files_routes, "UPLOADS_DIR", str(self.uploads)),
             patch.object(files_routes, "get_db", get_test_db),
+            patch.object(qanda_routes, "UPLOADS_DIR", str(self.uploads)),
+            patch.object(qanda_routes, "get_db", get_test_db),
         ]
         for active_patch in self.patches:
             active_patch.start()
@@ -545,6 +620,70 @@ class CoursewareRouteIntegrationTests(unittest.TestCase):
         deleted = self.client.delete(f"/api/courseware/{pptx_id}")
         self.assertEqual(deleted.status_code, 200)
         self.assertFalse((self.uploads / "legacy.pptx").exists())
+
+    def test_tampered_and_empty_pdf_are_excluded_everywhere(self):
+        files = {
+            "valid.pdf": valid_pdf(),
+            "tampered.pdf": b"ordinary text pretending to be a PDF",
+            "empty.pdf": b"",
+        }
+        for filename, content in files.items():
+            (self.uploads / filename).write_bytes(content)
+
+        conn = sqlite3.connect(self.database)
+        conn.executemany(
+            "INSERT INTO courseware "
+            "(title, date, tags, pdf_path) VALUES (?, ?, ?, ?)",
+            (
+                ("valid", "2026-07-28", "physics", "valid.pdf"),
+                ("tampered", "2026-07-28", "physics", "tampered.pdf"),
+                ("empty", "2026-07-28", "physics", "empty.pdf"),
+            ),
+        )
+        conn.commit()
+        ids = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT title, id FROM courseware"
+            ).fetchall()
+        }
+        conn.close()
+
+        for path in ("/api/courseware/list", "/api/courseware/list?tag=physics"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(
+                    [item["title"] for item in response.json()],
+                    ["valid"],
+                )
+
+        stats = self.client.get("/api/qanda/stats")
+        self.assertEqual(stats.status_code, 200)
+        self.assertEqual(stats.json()["total_courseware"], 1)
+
+        self.assertEqual(
+            self.client.get(f"/api/courseware/{ids['valid']}").status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.get("/data/uploads/valid.pdf").status_code,
+            200,
+        )
+        for title in ("tampered", "empty"):
+            with self.subTest(title=title):
+                self.assertEqual(
+                    self.client.get(
+                        f"/api/courseware/{ids[title]}"
+                    ).status_code,
+                    404,
+                )
+                self.assertEqual(
+                    self.client.get(
+                        f"/data/uploads/{title}.pdf"
+                    ).status_code,
+                    404,
+                )
 
     def test_upload_without_date_uses_stable_created_order(self):
         for title in ("first", "second"):

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -13,6 +14,7 @@ RETENTION_DELTA = timedelta(days=RETENTION_DAYS)
 MAX_SELF_CHECK_SECONDS = 60 * 60
 FAILURE_RETRY_SECONDS = 5 * 60
 SQLITE_UTC_FORMAT = "%Y-%m-%d %H:%M:%S"
+SQLITE_UTC_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
 
 def utc_now() -> datetime:
@@ -20,10 +22,14 @@ def utc_now() -> datetime:
 
 
 def parse_sqlite_utc(value: object) -> datetime | None:
-    if not isinstance(value, str):
+    if not isinstance(value, str) or not SQLITE_UTC_PATTERN.fullmatch(value):
         return None
     try:
-        return datetime.strptime(value, SQLITE_UTC_FORMAT).replace(
+        parsed = datetime.strptime(value, SQLITE_UTC_FORMAT)
+        # strptime 在部分平台会接受非零填充字段，正则和回写共同锁定格式。
+        if parsed.strftime(SQLITE_UTC_FORMAT) != value:
+            return None
+        return parsed.replace(
             tzinfo=timezone.utc
         )
     except ValueError:
@@ -69,16 +75,31 @@ def purge_expired_contacts(
     current = (now or utc_now()).astimezone(timezone.utc)
     conn = connection_factory()
     try:
-        cursor = conn.execute(
-            """
-            DELETE FROM contact_submissions
-            WHERE datetime(created_at) IS NOT NULL
-              AND datetime(created_at) <= datetime(?)
-            """,
-            (format_sqlite_utc(retention_cutoff(current)),),
-        )
+        rows = conn.execute(
+            "SELECT id, created_at FROM contact_submissions"
+        ).fetchall()
+        cutoff = retention_cutoff(current)
+        expired = [
+            (row["id"], row["created_at"])
+            for row in rows
+            if (
+                (created_at := parse_sqlite_utc(row["created_at"])) is not None
+                and created_at <= cutoff
+            )
+        ]
+        deleted = 0
+        for submission_id, original_created_at in expired:
+            # 同时匹配读取时的原值，避免并发改时后误删已变化的记录。
+            cursor = conn.execute(
+                """
+                DELETE FROM contact_submissions
+                WHERE id = ? AND created_at = ?
+                """,
+                (submission_id, original_created_at),
+            )
+            deleted += cursor.rowcount
         conn.commit()
-        return cursor.rowcount
+        return deleted
     except Exception:
         conn.rollback()
         raise

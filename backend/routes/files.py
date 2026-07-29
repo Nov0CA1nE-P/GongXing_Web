@@ -8,6 +8,7 @@ from config import UPLOADS_DIR
 from database import get_db
 from file_storage import (
     DOWNLOAD_MIME_TYPES,
+    UnsafeStoredPath,
     is_safe_basename,
     public_pdf_filename,
     resolve_upload_path,
@@ -42,11 +43,14 @@ def download_courseware_file(filename: str):
     if matching_row is None:
         raise HTTPException(status_code=404, detail="文件不存在") from None
 
-    file_path = resolve_upload_path(
-        matching_row["pdf_path"],
-        uploads_dir=UPLOADS_DIR,
-        require_exists=True,
-    )
+    try:
+        file_path = resolve_upload_path(
+            matching_row["pdf_path"],
+            uploads_dir=UPLOADS_DIR,
+            require_exists=True,
+        )
+    except (UnsafeStoredPath, FileNotFoundError, OSError):
+        raise HTTPException(status_code=404, detail="文件不存在") from None
     encoded_name = quote(filename, safe="")
     return FileResponse(
         file_path,

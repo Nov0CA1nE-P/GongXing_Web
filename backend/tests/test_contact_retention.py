@@ -3,8 +3,10 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -30,6 +32,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import routes.contact as contact_routes
+from abuse_protection import VisitorIdentityMiddleware
 from auth import AdminSession, require_admin, require_admin_write
 from contact_retention import (
     ContactRetentionWorker,
@@ -72,7 +75,7 @@ class ContactRetentionBoundaryTests(unittest.TestCase):
     def tearDown(self):
         self.temp_context.cleanup()
 
-    def insert(self, created_at: str, name: str = "昵称") -> int:
+    def insert(self, created_at: object, name: str = "昵称") -> int:
         conn = self.get_test_db()
         cursor = conn.execute(
             "INSERT INTO contact_submissions "
@@ -105,24 +108,110 @@ class ContactRetentionBoundaryTests(unittest.TestCase):
 
     def test_invalid_timestamp_is_visible_and_not_auto_deleted(self):
         now = datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc)
-        invalid_id = self.insert("not-a-time", "invalid")
-        view = classify_contact_timestamp("not-a-time", now=now)
-        self.assertEqual(view.retention_status, "invalid_timestamp")
-        self.assertTrue(view.is_visible)
-        self.assertIsNone(view.expires_at)
+        invalid_values = (
+            "2026-04-01T00:00:00Z",
+            "2026-04-01 00:00:00+00:00",
+            "2026-04-01 00:00:00.000",
+            " 2026-04-01 00:00:00",
+            "2026-04-01 00:00:00 ",
+            "2026-02-30 00:00:00",
+            "",
+            None,
+            20260401000000,
+        )
+        invalid_ids = [
+            self.insert(value, f"invalid-{index}")
+            for index, value in enumerate(invalid_values)
+        ]
+        for value in invalid_values:
+            with self.subTest(value=value):
+                view = classify_contact_timestamp(value, now=now)
+                self.assertEqual(
+                    view.retention_status,
+                    "invalid_timestamp",
+                )
+                self.assertTrue(view.is_visible)
+                self.assertIsNone(view.expires_at)
 
         purge_expired_contacts(
             now=now,
             connection_factory=self.get_test_db,
         )
         conn = self.get_test_db()
-        self.assertIsNotNone(
+        remaining_ids = {
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM contact_submissions"
+            ).fetchall()
+        }
+        conn.close()
+        self.assertEqual(remaining_ids, set(invalid_ids))
+
+    def test_strict_valid_timestamp_is_parsed_and_expired(self):
+        now = datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc)
+        expired_id = self.insert("2026-04-01 00:00:00", "strict-valid")
+        view = classify_contact_timestamp(
+            "2026-04-01 00:00:00",
+            now=now,
+        )
+        self.assertEqual(view.retention_status, "active")
+        self.assertFalse(view.is_visible)
+        self.assertEqual(
+            purge_expired_contacts(
+                now=now,
+                connection_factory=self.get_test_db,
+            ),
+            1,
+        )
+        conn = self.get_test_db()
+        self.assertIsNone(
             conn.execute(
                 "SELECT id FROM contact_submissions WHERE id = ?",
-                (invalid_id,),
+                (expired_id,),
             ).fetchone()
         )
         conn.close()
+
+    def test_purge_does_not_delete_record_changed_after_read(self):
+        now = datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc)
+        item_id = self.insert("2026-04-01 00:00:00", "changed")
+
+        class RacingConnection:
+            def __init__(self, connection):
+                self.connection = connection
+                self.changed = False
+
+            def execute(self, sql, parameters=()):
+                if sql.lstrip().startswith("DELETE") and not self.changed:
+                    self.connection.execute(
+                        "UPDATE contact_submissions SET created_at = ? "
+                        "WHERE id = ?",
+                        ("2026-07-29 11:59:59", item_id),
+                    )
+                    self.changed = True
+                return self.connection.execute(sql, parameters)
+
+            def commit(self):
+                self.connection.commit()
+
+            def rollback(self):
+                self.connection.rollback()
+
+            def close(self):
+                self.connection.close()
+
+        deleted = purge_expired_contacts(
+            now=now,
+            connection_factory=lambda: RacingConnection(self.get_test_db()),
+        )
+        self.assertEqual(deleted, 0)
+        conn = self.get_test_db()
+        row = conn.execute(
+            "SELECT created_at FROM contact_submissions WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        conn.close()
+        self.assertEqual(row["created_at"], "2026-07-29 11:59:59")
 
 
 class ContactRouteRetentionTests(unittest.TestCase):
@@ -138,6 +227,7 @@ class ContactRouteRetentionTests(unittest.TestCase):
 
         self.get_test_db = get_test_db
         self.app = FastAPI()
+        self.app.add_middleware(VisitorIdentityMiddleware)
         self.app.include_router(contact_routes.router)
         session = AdminSession(
             role="admin",
@@ -192,7 +282,7 @@ class ContactRouteRetentionTests(unittest.TestCase):
         self.assertIsNone(invalid["expires_at"])
 
     def test_invalid_record_can_be_deleted_manually(self):
-        invalid_id = self.insert("invalid", "invalid")
+        invalid_id = self.insert("2026-04-01T00:00:00Z", "invalid")
         response = self.client.delete(
             f"/api/contact/submissions/{invalid_id}"
         )
@@ -205,11 +295,31 @@ class ContactRouteRetentionTests(unittest.TestCase):
         )
 
     def test_cleanup_failure_does_not_block_new_submission(self):
-        with patch(
-            "contact_retention.purge_expired_contacts",
-            side_effect=sqlite3.OperationalError("simulated cleanup failure"),
-        ):
-            response = self.client.post(
+        cleanup_attempted = threading.Event()
+
+        def failing_cleanup():
+            cleanup_attempted.set()
+            raise sqlite3.OperationalError("simulated cleanup failure")
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            worker = ContactRetentionWorker(
+                purge=failing_cleanup,
+                next_expiry=lambda: None,
+            )
+            app.state.contact_retention_worker = worker
+            worker.start()
+            try:
+                yield
+            finally:
+                await worker.stop()
+
+        app = FastAPI(lifespan=lifespan)
+        app.add_middleware(VisitorIdentityMiddleware)
+        app.include_router(contact_routes.router)
+        with TestClient(app) as client:
+            self.assertTrue(cleanup_attempted.wait(timeout=1))
+            response = client.post(
                 "/api/contact/submit",
                 json={
                     "name": "新昵称",
