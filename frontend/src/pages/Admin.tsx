@@ -1,6 +1,11 @@
 import { useEffect, useState, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { adminRequest, getApiError } from '../config/adminApi'
+import {
+  adminRequest,
+  clearAdminCsrfToken,
+  getApiError,
+  setAdminCsrfToken,
+} from '../config/adminApi'
 
 type Tab = 'pending' | 'pending_follow_ups' | 'allqa' | 'messages' | 'contacts' | 'upload'
 type AuthState = 'checking' | 'anonymous' | 'authenticated'
@@ -38,14 +43,14 @@ function Admin() {
 
   const handleResponse = async (response: Response, fallback: string) => {
     if (response.status === 401) {
+      clearAdminCsrfToken()
       clearAdminData()
       setAuthState('anonymous')
       setAuthMessage('登录已过期，请重新登录')
-      void adminRequest('/admin/logout', { method: 'POST' }).catch(() => undefined)
       return false
     }
     if (response.status === 403) {
-      toast_('当前身份无权执行此操作')
+      toast_(await getApiError(response, '安全校验失败或当前身份无权限'))
       return false
     }
     if (!response.ok) {
@@ -61,6 +66,8 @@ function Admin() {
       .then(async response => {
         if (!active) return
         if (response.ok) {
+          const session = await response.json()
+          setAdminCsrfToken(session.csrf_token)
           setAuthState('authenticated')
           const pendingResponse = await adminRequest('/qanda/questions/pending')
           if (!active) return
@@ -68,16 +75,17 @@ function Admin() {
             setPending(await pendingResponse.json())
           } else if (pendingResponse.status === 401) {
             clearAdminData()
+            clearAdminCsrfToken()
             setAuthState('anonymous')
             setAuthMessage('登录已过期，请重新登录')
-            void adminRequest('/admin/logout', { method: 'POST' }).catch(() => undefined)
           } else {
             toast_(await getApiError(pendingResponse, '待审核问答加载失败'))
           }
         } else {
+          clearAdminCsrfToken()
           setAuthState('anonymous')
           if (response.status === 401) {
-            void adminRequest('/admin/logout', { method: 'POST' }).catch(() => undefined)
+            setAuthMessage('登录已过期，请重新登录')
           } else {
             setAuthMessage(await getApiError(response, '会话检查失败'))
           }
@@ -85,6 +93,7 @@ function Admin() {
       })
       .catch(() => {
         if (active) {
+          clearAdminCsrfToken()
           setAuthState('anonymous')
           setAuthMessage('暂时无法连接服务器，请稍后重试')
         }
@@ -104,9 +113,12 @@ function Admin() {
         body: JSON.stringify({ password: pwd }),
       })
       if (!response.ok) {
+        clearAdminCsrfToken()
         setAuthMessage(await getApiError(response, '登录失败，请稍后重试'))
         return
       }
+      const session = await response.json()
+      setAdminCsrfToken(session.csrf_token)
       loginSucceeded = true
       setAuthState('authenticated')
       const pendingResponse = await adminRequest('/qanda/questions/pending')
@@ -130,6 +142,7 @@ function Admin() {
         return
       }
       clearAdminData()
+      clearAdminCsrfToken()
       setAuthState('anonymous')
       setAuthMessage('已退出登录')
     } catch {

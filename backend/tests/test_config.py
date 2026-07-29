@@ -16,6 +16,8 @@ class ConfigValidationTests(unittest.TestCase):
             "ADMIN_PASSWORD",
             "ADMIN_SESSION_TTL_SECONDS",
             "COURSEWARE_MAX_UPLOAD_MB",
+            "TRUSTED_ORIGINS",
+            "CORS_ALLOWED_ORIGINS",
         ):
             env.pop(name, None)
         env.update(settings)
@@ -52,6 +54,7 @@ class ConfigValidationTests(unittest.TestCase):
         base = {
             "APP_ENV": "test",
             "ADMIN_PASSWORD": "a-strong-test-password",
+            "TRUSTED_ORIGINS": "https://test.example",
         }
         self.assertNotEqual(
             self.import_config(
@@ -89,6 +92,7 @@ class ConfigValidationTests(unittest.TestCase):
                         APP_ENV="production",
                         ADMIN_PASSWORD=password,
                         ADMIN_SESSION_TTL_SECONDS="7200",
+                        TRUSTED_ORIGINS="https://example.com",
                     ).returncode,
                     0,
                 )
@@ -98,6 +102,7 @@ class ConfigValidationTests(unittest.TestCase):
             APP_ENV="production",
             ADMIN_PASSWORD="a-production-password-strong-enough",
             ADMIN_SESSION_TTL_SECONDS="7200",
+            TRUSTED_ORIGINS="https://example.com",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -106,6 +111,7 @@ class ConfigValidationTests(unittest.TestCase):
             "APP_ENV": "test",
             "ADMIN_PASSWORD": "a-strong-test-password",
             "ADMIN_SESSION_TTL_SECONDS": "7200",
+            "TRUSTED_ORIGINS": "https://test.example",
         }
         for value in ("abc", "0", "501"):
             with self.subTest(value=value):
@@ -120,6 +126,69 @@ class ConfigValidationTests(unittest.TestCase):
             self.import_config(
                 **base,
                 COURSEWARE_MAX_UPLOAD_MB="50",
+            ).returncode,
+            0,
+        )
+
+    def test_trusted_origins_are_required_and_strictly_validated(self):
+        base = {
+            "APP_ENV": "test",
+            "ADMIN_PASSWORD": "a-strong-test-password",
+        }
+        self.assertNotEqual(self.import_config(**base).returncode, 0)
+        for origin in (
+            "*",
+            "null",
+            "https://test.example/path",
+            "https://test.example?query=1",
+            "https://test.example#fragment",
+            "http://test.example",
+            "https://user@test.example",
+        ):
+            with self.subTest(origin=origin):
+                self.assertNotEqual(
+                    self.import_config(
+                        **base,
+                        TRUSTED_ORIGINS=origin,
+                    ).returncode,
+                    0,
+                )
+
+    def test_environment_origin_rules_and_cors_subset(self):
+        common = {
+            "ADMIN_PASSWORD": "a-strong-test-password",
+            "ADMIN_SESSION_TTL_SECONDS": "7200",
+        }
+        self.assertEqual(
+            self.import_config(
+                **common,
+                APP_ENV="development",
+                TRUSTED_ORIGINS="http://127.0.0.1:5173",
+            ).returncode,
+            0,
+        )
+        self.assertNotEqual(
+            self.import_config(
+                **common,
+                APP_ENV="development",
+                TRUSTED_ORIGINS="https://example.com",
+            ).returncode,
+            0,
+        )
+        self.assertNotEqual(
+            self.import_config(
+                **common,
+                APP_ENV="production",
+                TRUSTED_ORIGINS="http://example.com",
+            ).returncode,
+            0,
+        )
+        self.assertNotEqual(
+            self.import_config(
+                **common,
+                APP_ENV="test",
+                TRUSTED_ORIGINS="https://test.example",
+                CORS_ALLOWED_ORIGINS="https://other.example",
             ).returncode,
             0,
         )

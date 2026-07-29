@@ -13,7 +13,7 @@ from fastapi import (
     UploadFile,
 )
 
-from auth import AdminSession, require_admin
+from auth import AdminSession, require_admin_write
 from config import (
     COURSEWARE_MAX_UPLOAD_BYTES,
     COURSEWARE_TEMP_DIR,
@@ -75,7 +75,7 @@ async def upload_courseware(
     description: str = Form(""),
     tags: str = Form(""),
     file: UploadFile = File(...),
-    _admin: AdminSession = Depends(require_admin),
+    _admin: AdminSession = Depends(require_admin_write),
 ):
     """上传并验证新课件（管理员功能）。"""
     content_length = request.headers.get("content-length")
@@ -144,7 +144,7 @@ async def upload_courseware(
 @router.delete("/{courseware_id}")
 def delete_courseware(
     courseware_id: int,
-    _admin: AdminSession = Depends(require_admin),
+    _admin: AdminSession = Depends(require_admin_write),
 ):
     """只删除允许上传目录内的课件文件和对应数据库记录。"""
     conn = get_db()

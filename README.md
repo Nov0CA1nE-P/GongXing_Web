@@ -27,6 +27,10 @@ E:\VibeCoding\projects\Summercamp_website
 
 必须显式设置 `APP_ENV`。需要 AI 问答能力时再填写 API Key。相对数据库路径以项目根目录为基准，默认数据库位于 `data/site.db`。
 
+`TRUSTED_ORIGINS` 在所有环境中都必须显式配置，以逗号分隔精确的 scheme、host 和 port。不得填写通配符、`null`、路径、查询参数或片段。`development` 只允许明确列出的 localhost/127.0.0.1 来源；`test` 允许明确的回环来源或 HTTPS 测试域名；`production` 只接受 HTTPS 正式来源。
+
+正式同域部署时 `CORS_ALLOWED_ORIGINS` 留空，不启用跨域响应。只有本地直接访问独立后端等跨域调试场景才填写白名单，而且它必须是 `TRUSTED_ORIGINS` 的子集。跨域仅开放 GET、POST、PUT、DELETE，以及 `Content-Type`、`X-CSRF-Token` 请求头。
+
 管理员密码没有默认值。`production` 环境要求密码至少 12 个字符，且不能使用 `admin123` 或示例占位符；否则后端会明确拒绝启动。`development` 环境未配置安全密码时，公开页面仍可启动，但管理员登录会返回 503。
 
 `ADMIN_SESSION_TTL_SECONDS` 是管理员会话的绝对有效期，默认 7200 秒，允许范围为 300～28800 秒；无效值会导致后端拒绝启动。
@@ -122,6 +126,9 @@ python scripts/audit_courseware_paths.py \
 - 只支持一个后端进程和一个实例。生产环境只能运行一个 Uvicorn worker；不要使用 `uvicorn --workers 2`、Gunicorn 多 worker 或多个并行后端实例，否则请求被分配到其他进程时会随机返回 401。
 - 需要扩展为多进程或多实例时，必须先把会话迁移到 Redis、数据库或其他共享存储。
 - 只支持前端与 API 同站部署。开发环境依靠 Vite 代理，生产环境应由 Nginx 在同一站点反向代理 `/api`；当前的 `credentials: "same-origin"` 不支持独立 API 域名。
-- Cookie 使用 `SameSite=Strict`，不设置宽泛的 Domain。当前暂时假设没有不受信任的同站子域，且所有修改状态的接口均使用 POST、PUT 或 DELETE。
+- Cookie 使用 `SameSite=Strict`，不设置宽泛的 Domain。管理员登录必须来自可信 Origin，Origin 缺失时才检查唯一 Referer；重复、拼接、`null` 或不可信来源会被拒绝。
+- 登录成功后，每个会话都会生成独立 CSRF Token。Token 只保存在服务端会话和前端运行内存，页面刷新时通过会话检查重新取得，不进入 Cookie、URL、localStorage 或 sessionStorage。
+- 所有管理员 POST、PUT、DELETE 接口同时校验会话、管理员权限、可信来源和 `X-CSRF-Token`。GET 只读取业务状态，不创建或延长会话；服务端仍可清理已经过期的内部会话记录。
+- 退出保持幂等：缺失、伪造、已退出或过期会话返回 204 并清理残留 Cookie；有效会话只有通过来源和 CSRF 校验后才会被吊销。
 
-这只是当前单域场景的基础保护。公开上线前仍需单独完成精确 CORS 与可信 Origin、Origin/Referer 校验或 CSRF Token 等完整防护，并补充登录限流。当前认证闭环完成不代表后台已经适合直接暴露到公网。
+公开留言、联系和问答提交不使用管理员 Cookie，因此不要求管理员 CSRF Token。它们的防刷、限流仍是后续任务。当前防护依赖同域拓扑、可信来源配置和没有不受信任同站子域的假设；若改为独立 API 域名或跨站 Cookie，必须重新设计 CORS、Cookie 和 CSRF 策略。登录限流尚未完成，因此本轮安全闭环仍不代表后台已经适合直接暴露到公网。
