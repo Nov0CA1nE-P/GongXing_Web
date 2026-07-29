@@ -27,7 +27,7 @@ E:\VibeCoding\projects\Summercamp_website
 
 必须显式设置 `APP_ENV`。需要 AI 问答能力时再填写 API Key。相对数据库路径以项目根目录为基准，默认数据库位于 `data/site.db`。
 
-`TRUSTED_ORIGINS` 在所有环境中都必须显式配置，以逗号分隔精确的 scheme、host 和 port。不得填写通配符、`null`、路径、查询参数或片段。`development` 只允许明确列出的 localhost/127.0.0.1 来源；`test` 允许明确的回环来源或 HTTPS 测试域名；`production` 只接受 HTTPS 正式来源。
+`TRUSTED_ORIGINS` 在所有环境中都必须显式配置，以逗号分隔精确的 scheme、host 和 port。不得填写通配符、`null`、路径、查询参数或片段。scheme 和 host 按小写规范化，HTTP 的缺省端口与 80 等价，HTTPS 的缺省端口与 443 等价；等价来源不能重复配置。`development` 只允许明确列出的 localhost/127.0.0.1 来源；`test` 允许明确的回环来源或 HTTPS 测试域名；`production` 只接受 HTTPS 正式来源。
 
 正式同域部署时 `CORS_ALLOWED_ORIGINS` 留空，不启用跨域响应。只有本地直接访问独立后端等跨域调试场景才填写白名单，而且它必须是 `TRUSTED_ORIGINS` 的子集。跨域仅开放 GET、POST、PUT、DELETE，以及 `Content-Type`、`X-CSRF-Token` 请求头。
 

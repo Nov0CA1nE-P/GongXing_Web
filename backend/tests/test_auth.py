@@ -281,12 +281,36 @@ class AdminRouteTests(unittest.TestCase):
         self.assertEqual(allowed_referer.status_code, 200)
         self.client.cookies.clear()
 
+        for headers in (
+            {"Origin": "HTTPS://TEST.EXAMPLE:443"},
+            {"Referer": "HTTPS://TEST.EXAMPLE:443/admin"},
+        ):
+            with self.subTest(normalized_headers=headers):
+                normalized = self.client.post(
+                    "/api/admin/login",
+                    json={"password": "a-strong-test-password"},
+                    headers=headers,
+                )
+                self.assertEqual(normalized.status_code, 200)
+                self.client.cookies.clear()
+
         comma_origin = self.client.post(
             "/api/admin/login",
             json={"password": "a-strong-test-password"},
             headers={"Origin": "https://test.example, https://test.example"},
         )
         self.assertEqual(comma_origin.status_code, 403)
+        comma_referer = self.client.post(
+            "/api/admin/login",
+            json={"password": "a-strong-test-password"},
+            headers={
+                "Referer": (
+                    "https://test.example/admin, "
+                    "https://evil.example"
+                )
+            },
+        )
+        self.assertEqual(comma_referer.status_code, 403)
 
         duplicate_origin = self.client.post(
             "/api/admin/login",

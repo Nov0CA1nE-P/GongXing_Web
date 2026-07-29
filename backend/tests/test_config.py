@@ -9,7 +9,11 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 class ConfigValidationTests(unittest.TestCase):
-    def import_config(self, **settings: str):
+    def import_config(
+        self,
+        output_expression: str | None = None,
+        **settings: str,
+    ):
         env = os.environ.copy()
         for name in (
             "APP_ENV",
@@ -24,17 +28,20 @@ class ConfigValidationTests(unittest.TestCase):
         env["PYTHONPATH"] = str(BACKEND_DIR)
         env["PYTHON_DOTENV_DISABLED"] = "1"
         with tempfile.TemporaryDirectory() as workdir:
+            command = (
+                "import sys, types; "
+                "dotenv = types.ModuleType('dotenv'); "
+                "dotenv.load_dotenv = lambda: None; "
+                "sys.modules['dotenv'] = dotenv; "
+                "import config"
+            )
+            if output_expression:
+                command += f"; print(repr({output_expression}))"
             return subprocess.run(
                 [
                     sys.executable,
                     "-c",
-                    (
-                        "import sys, types; "
-                        "dotenv = types.ModuleType('dotenv'); "
-                        "dotenv.load_dotenv = lambda: None; "
-                        "sys.modules['dotenv'] = dotenv; "
-                        "import config"
-                    ),
+                    command,
                 ],
                 cwd=workdir,
                 env=env,
@@ -192,6 +199,44 @@ class ConfigValidationTests(unittest.TestCase):
             ).returncode,
             0,
         )
+
+    def test_origins_normalize_case_and_default_ports(self):
+        result = self.import_config(
+            "config.TRUSTED_ORIGINS",
+            APP_ENV="test",
+            ADMIN_PASSWORD="a-strong-test-password",
+            TRUSTED_ORIGINS=(
+                "HTTPS://TEST.EXAMPLE:443,"
+                "HTTP://127.0.0.1:80"
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "('https://test.example', 'http://127.0.0.1')",
+            result.stdout,
+        )
+
+    def test_equivalent_origins_are_duplicate(self):
+        result = self.import_config(
+            APP_ENV="test",
+            ADMIN_PASSWORD="a-strong-test-password",
+            TRUSTED_ORIGINS=(
+                "https://test.example,"
+                "HTTPS://TEST.EXAMPLE:443"
+            ),
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_cors_subset_uses_normalized_origins(self):
+        result = self.import_config(
+            "config.CORS_ALLOWED_ORIGINS",
+            APP_ENV="test",
+            ADMIN_PASSWORD="a-strong-test-password",
+            TRUSTED_ORIGINS="HTTPS://TEST.EXAMPLE:443",
+            CORS_ALLOWED_ORIGINS="https://test.example",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("('https://test.example',)", result.stdout)
 
 
 if __name__ == "__main__":

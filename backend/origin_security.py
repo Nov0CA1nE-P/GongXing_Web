@@ -1,9 +1,9 @@
 import secrets
-from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 
 from config import TRUSTED_ORIGINS
+from origin_normalization import normalize_origin
 
 CSRF_HEADER_NAME = "x-csrf-token"
 
@@ -22,20 +22,9 @@ def _reject_untrusted_source() -> None:
 
 
 def _origin_from_referer(referer: str) -> str | None:
-    try:
-        parsed = urlsplit(referer)
-        _ = parsed.port
-    except ValueError:
+    if "," in referer:
         return None
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.fragment
-    ):
-        return None
-    return f"{parsed.scheme}://{parsed.netloc}"
+    return normalize_origin(referer, allow_path_and_query=True)
 
 
 def require_trusted_source(request: Request) -> None:
@@ -46,8 +35,8 @@ def require_trusted_source(request: Request) -> None:
         _reject_untrusted_source()
 
     if origins:
-        origin = origins[0]
-        if "," in origin or origin == "null" or origin not in TRUSTED_ORIGINS:
+        origin = normalize_origin(origins[0])
+        if origin is None or origin not in TRUSTED_ORIGINS:
             _reject_untrusted_source()
         return
 

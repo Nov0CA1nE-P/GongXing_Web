@@ -1,8 +1,9 @@
-import os
 import ipaddress
+import os
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
+from origin_normalization import normalize_origin
 
 load_dotenv()
 
@@ -36,30 +37,21 @@ def _parse_origin_list(setting_name: str, *, required: bool) -> tuple[str, ...]:
 
     origins: list[str] = []
     for raw_origin in raw_value.split(","):
-        origin = raw_origin.strip()
-        if not origin or origin == "null" or "*" in origin:
+        candidate = raw_origin.strip()
+        if not candidate or candidate == "null" or "*" in candidate:
             raise RuntimeError(f"{setting_name} 包含无效来源")
-        try:
-            parsed = urlsplit(origin)
-            port = parsed.port
-        except ValueError as exc:
-            raise RuntimeError(f"{setting_name} 包含无效来源") from exc
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.path
-            or parsed.query
-            or parsed.fragment
-        ):
+        origin = normalize_origin(candidate)
+        if origin is None:
             raise RuntimeError(f"{setting_name} 只允许精确的 HTTP(S) Origin")
-        if port is not None and not 1 <= port <= 65535:
-            raise RuntimeError(f"{setting_name} 包含无效端口")
 
-        hostname = parsed.hostname.lower()
+        hostname = urlsplit(origin).hostname
+        if hostname is None:
+            raise RuntimeError(f"{setting_name} 包含无效来源")
         if APP_ENV == "production":
-            if parsed.scheme != "https" or _is_loopback_host(hostname):
+            if (
+                not origin.startswith("https://")
+                or _is_loopback_host(hostname)
+            ):
                 raise RuntimeError(
                     f"{setting_name} 在 production 中只允许 HTTPS 正式来源"
                 )
@@ -68,7 +60,10 @@ def _parse_origin_list(setting_name: str, *, required: bool) -> tuple[str, ...]:
                 raise RuntimeError(
                     f"{setting_name} 在 development 中只允许回环来源"
                 )
-        elif parsed.scheme == "http" and not _is_loopback_host(hostname):
+        elif (
+            origin.startswith("http://")
+            and not _is_loopback_host(hostname)
+        ):
             raise RuntimeError(
                 f"{setting_name} 在 test 中的 HTTP 来源必须是回环地址"
             )

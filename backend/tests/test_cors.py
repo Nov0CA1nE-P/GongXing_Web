@@ -92,6 +92,22 @@ class CorsTests(unittest.TestCase):
             request.headers,
         )
 
+    def test_cors_compares_normalized_default_port_and_host_case(self):
+        request_origin = "https://TEST.EXAMPLE:443"
+        with TestClient(build_app(("https://test.example",))) as client:
+            response = client.options(
+                "/resource",
+                headers={
+                    "Origin": request_origin,
+                    "Access-Control-Request-Method": "POST",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["access-control-allow-origin"],
+            request_origin,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
