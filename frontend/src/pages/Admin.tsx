@@ -6,9 +6,22 @@ import {
   getApiError,
   setAdminCsrfToken,
 } from '../config/adminApi'
+import { loadJson } from '../config/listApi'
+import { isCoursewareList, type CoursewareItem } from '../types/courseware'
 
 type Tab = 'pending' | 'pending_follow_ups' | 'allqa' | 'messages' | 'contacts' | 'upload'
 type AuthState = 'checking' | 'anonymous' | 'authenticated'
+
+function getCoursewareFile(item: CoursewareItem) {
+  const fileName = item.pdf_path || item.pptx_path || ''
+  const extension = fileName.split('.').pop()?.toUpperCase() || ''
+  return {
+    fileName,
+    fileType: ['PDF', 'PPT', 'PPTX'].includes(extension)
+      ? extension
+      : '课件文件',
+  }
+}
 
 function Admin() {
   const [pwd, setPwd] = useState('')
@@ -22,6 +35,7 @@ function Admin() {
   const [msgs, setMsgs] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [toast, setToast] = useState('')
+  const [toastError, setToastError] = useState(false)
 
   const [cwTitle, setCwTitle] = useState('')
   const [cwDate, setCwDate] = useState('')
@@ -29,9 +43,22 @@ function Admin() {
   const [cwTags, setCwTags] = useState('')
   const [cwFile, setCwFile] = useState<File | null>(null)
   const [cwMsg, setCwMsg] = useState('')
+  const [courseware, setCourseware] = useState<CoursewareItem[]>([])
+  const [cwListLoading, setCwListLoading] = useState(false)
+  const [cwListLoaded, setCwListLoaded] = useState(false)
+  const [cwListError, setCwListError] = useState('')
+  const [cwActionError, setCwActionError] = useState('')
+  const [cwUploading, setCwUploading] = useState(false)
+  const [deletingCoursewareId, setDeletingCoursewareId] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const coursewareRequestIdRef = useRef(0)
+  const coursewareControllerRef = useRef<AbortController | null>(null)
 
-  const toast_ = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2800) }
+  const toast_ = (m: string, error = false) => {
+    setToastError(error)
+    setToast(m)
+    setTimeout(() => setToast(''), 2800)
+  }
 
   const clearAdminData = () => {
     setPending([])
@@ -39,22 +66,34 @@ function Admin() {
     setAllQA([])
     setContacts([])
     setMsgs([])
+    coursewareRequestIdRef.current += 1
+    coursewareControllerRef.current?.abort()
+    setCourseware([])
+    setCwListLoading(false)
+    setCwListLoaded(false)
+    setCwListError('')
+    setCwActionError('')
+    setDeletingCoursewareId(null)
+  }
+
+  const expireAdminSession = () => {
+    clearAdminCsrfToken()
+    clearAdminData()
+    setAuthState('anonymous')
+    setAuthMessage('登录已过期，请重新登录')
   }
 
   const handleResponse = async (response: Response, fallback: string) => {
     if (response.status === 401) {
-      clearAdminCsrfToken()
-      clearAdminData()
-      setAuthState('anonymous')
-      setAuthMessage('登录已过期，请重新登录')
+      expireAdminSession()
       return false
     }
     if (response.status === 403) {
-      toast_(await getApiError(response, '安全校验失败或当前身份无权限'))
+      toast_(await getApiError(response, '安全校验失败或当前身份无权限'), true)
       return false
     }
     if (!response.ok) {
-      toast_(await getApiError(response, fallback))
+      toast_(await getApiError(response, fallback), true)
       return false
     }
     return true
@@ -74,12 +113,9 @@ function Admin() {
           if (pendingResponse.ok) {
             setPending(await pendingResponse.json())
           } else if (pendingResponse.status === 401) {
-            clearAdminData()
-            clearAdminCsrfToken()
-            setAuthState('anonymous')
-            setAuthMessage('登录已过期，请重新登录')
+            expireAdminSession()
           } else {
-            toast_(await getApiError(pendingResponse, '待审核问答加载失败'))
+            toast_(await getApiError(pendingResponse, '待审核问答加载失败'), true)
           }
         } else {
           clearAdminCsrfToken()
@@ -98,7 +134,11 @@ function Admin() {
           setAuthMessage('暂时无法连接服务器，请稍后重试')
         }
       })
-    return () => { active = false }
+    return () => {
+      active = false
+      coursewareRequestIdRef.current += 1
+      coursewareControllerRef.current?.abort()
+    }
   }, [])
 
   const login = async () => {
@@ -126,7 +166,7 @@ function Admin() {
         setPending(await pendingResponse.json())
       }
     } catch {
-      if (loginSucceeded) toast_('管理数据加载失败，请稍后重试')
+      if (loginSucceeded) toast_('管理数据加载失败，请稍后重试', true)
       else setAuthMessage('暂时无法连接服务器，请稍后重试')
     } finally {
       setPwd('')
@@ -138,7 +178,7 @@ function Admin() {
     try {
       const response = await adminRequest('/admin/logout', { method: 'POST' })
       if (!response.ok) {
-        toast_(await getApiError(response, '退出失败，请稍后重试'))
+        toast_(await getApiError(response, '退出失败，请稍后重试'), true)
         return
       }
       clearAdminData()
@@ -146,8 +186,56 @@ function Admin() {
       setAuthState('anonymous')
       setAuthMessage('已退出登录')
     } catch {
-      toast_('退出失败，请检查网络后重试')
+      toast_('退出失败，请检查网络后重试', true)
     }
+  }
+
+  const loadCourseware = async (): Promise<'success' | 'failed' | 'ignored'> => {
+    const requestId = coursewareRequestIdRef.current + 1
+    coursewareRequestIdRef.current = requestId
+    coursewareControllerRef.current?.abort()
+    const controller = new AbortController()
+    coursewareControllerRef.current = controller
+    setCwListLoading(true)
+    setCwListError('')
+
+    const result = await loadJson(
+      {
+        request: signal => adminRequest('/courseware/list', { signal }),
+        validate: isCoursewareList,
+        getHttpError: response => getApiError(
+          response,
+          '课件列表加载失败，请稍后重试',
+        ),
+        invalidMessage: '服务器返回的课件数据格式异常，请稍后重试',
+        networkMessage: '无法连接课件服务，请检查网络后重试',
+      },
+      controller.signal,
+    )
+
+    if (
+      requestId !== coursewareRequestIdRef.current
+      || (!result.ok && result.kind === 'aborted')
+    ) {
+      return 'ignored'
+    }
+
+    if (result.ok) {
+      setCourseware(result.data)
+      setCwListLoaded(true)
+      setCwListLoading(false)
+      setCwActionError('')
+      return 'success'
+    }
+
+    if (result.status === 401) {
+      expireAdminSession()
+      return 'failed'
+    }
+
+    setCwListError(result.message)
+    setCwListLoading(false)
+    return 'failed'
   }
 
   const fetchData = async (t: Tab) => {
@@ -169,9 +257,11 @@ function Admin() {
       } else if (t === 'messages') {
         response = await adminRequest('/guestbook/messages?limit=100')
         if (await handleResponse(response, '留言加载失败')) setMsgs((await response.json()).messages)
+      } else if (t === 'upload') {
+        await loadCourseware()
       }
     } catch {
-      toast_('网络连接失败，请稍后重试')
+      toast_('网络连接失败，请稍后重试', true)
     }
   }
 
@@ -185,7 +275,7 @@ function Admin() {
         toast_(s === 'published' ? '已发布' : '已拒绝')
         void fetchData('pending')
       }
-    } catch { toast_('网络连接失败，请稍后重试') }
+    } catch { toast_('网络连接失败，请稍后重试', true) }
   }
 
   const reviewFollowUp = async (fid: number, s: string) => {
@@ -198,7 +288,7 @@ function Admin() {
         toast_(s === 'published' ? '已发布' : '已拒绝')
         void fetchData('pending_follow_ups')
       }
-    } catch { toast_('网络连接失败，请稍后重试') }
+    } catch { toast_('网络连接失败，请稍后重试', true) }
   }
 
   const deleteFollowUp = async (fid: number) => {
@@ -209,7 +299,7 @@ function Admin() {
         toast_('已删除')
         void fetchData('pending_follow_ups')
       }
-    } catch { toast_('网络连接失败，请稍后重试') }
+    } catch { toast_('网络连接失败，请稍后重试', true) }
   }
 
   const deleteQA = async (qid: number) => {
@@ -220,7 +310,7 @@ function Admin() {
         toast_('已删除')
         void fetchData(tab)
       }
-    } catch { toast_('网络连接失败，请稍后重试') }
+    } catch { toast_('网络连接失败，请稍后重试', true) }
   }
 
   const deleteMsg = async (mid: number) => {
@@ -231,12 +321,52 @@ function Admin() {
         toast_('已删除')
         void fetchData('messages')
       }
-    } catch { toast_('网络连接失败，请稍后重试') }
+    } catch { toast_('网络连接失败，请稍后重试', true) }
+  }
+
+  const deleteCourseware = async (item: CoursewareItem) => {
+    if (deletingCoursewareId !== null) return
+    if (!confirm(`确定删除课件“${item.title}”吗？删除后将无法从网站恢复。`)) return
+
+    setDeletingCoursewareId(item.id)
+    setCwActionError('')
+    try {
+      const response = await adminRequest(`/courseware/${item.id}`, {
+        method: 'DELETE',
+      })
+      if (response.status === 401) {
+        await handleResponse(response, '课件删除失败')
+        return
+      }
+      if (response.status === 404) {
+        setCourseware(current => current.filter(course => course.id !== item.id))
+        toast_('该课件已经不存在，列表已更新', true)
+        return
+      }
+      if (!response.ok) {
+        const message = await getApiError(response, '课件删除失败，请稍后重试')
+        setCwActionError(message)
+        toast_(message, true)
+        return
+      }
+
+      setCourseware(current => current.filter(course => course.id !== item.id))
+      setCwActionError('')
+      toast_('课件已删除')
+    } catch {
+      const message = '网络连接失败，删除结果未确认，请手动刷新'
+      setCwActionError(message)
+      toast_(message, true)
+    } finally {
+      setDeletingCoursewareId(current => current === item.id ? null : current)
+    }
   }
 
   const upload = async () => {
-    if (!cwTitle || !cwDate || !cwFile) return
+    if (!cwTitle || !cwDate || !cwFile || cwUploading) return
+    setCwUploading(true)
     setCwMsg('')
+    setCwActionError('')
     const fd = new FormData()
     fd.append('title', cwTitle); fd.append('date', cwDate)
     fd.append('description', cwDesc); fd.append('tags', cwTags); fd.append('file', cwFile)
@@ -247,13 +377,20 @@ function Admin() {
       } else if (!response.ok) {
         setCwMsg(await getApiError(response, '课件上传失败'))
       } else {
-        toast_('课件上传成功')
         setCwMsg('')
         setCwTitle(''); setCwDate(''); setCwDesc(''); setCwTags(''); setCwFile(null)
         if (fileRef.current) fileRef.current.value = ''
+        const refreshResult = await loadCourseware()
+        if (refreshResult === 'failed') {
+          toast_('课件上传成功，但列表刷新失败，请手动刷新', true)
+        } else {
+          toast_('课件上传成功')
+        }
       }
     } catch {
       setCwMsg('网络连接失败，请稍后重试')
+    } finally {
+      setCwUploading(false)
     }
   }
 
@@ -293,12 +430,12 @@ function Admin() {
     ['allqa', '全部问答', null],
     ['messages', '留言管理', null],
     ['contacts', '联系表单', null],
-    ['upload', '上传课件', null],
+    ['upload', '课件管理', null],
   ]
 
   return (
     <div>
-      {toast && <div className="toast toast-success">{toast}</div>}
+      {toast && <div className={`toast ${toastError ? 'toast-error' : 'toast-success'}`}>{toast}</div>}
       <div className="page-header">
         <h1>管理后台</h1>
         <button className="btn btn-outline btn-sm" onClick={logout}>退出登录</button>
@@ -456,30 +593,121 @@ function Admin() {
           )
         )}
 
-        {/* 上传课件 */}
+        {/* 课件管理 */}
         {tab === 'upload' && (
-          <div className="card" style={{ padding: '28px' }}>
-            <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '20px' }}>上传新课件</h2>
-            <div className="form-group">
-              <input value={cwTitle} onChange={e => setCwTitle(e.target.value)} placeholder="课件标题" />
+          <>
+            <div className="card" style={{ padding: '28px' }}>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '20px' }}>上传新课件</h2>
+              <div className="form-group">
+                <input value={cwTitle} onChange={e => setCwTitle(e.target.value)} placeholder="课件标题" />
+              </div>
+              <div className="form-group">
+                <input type="date" value={cwDate} onChange={e => setCwDate(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <input value={cwDesc} onChange={e => setCwDesc(e.target.value)} placeholder="简介（可选）" />
+              </div>
+              <div className="form-group">
+                <input value={cwTags} onChange={e => setCwTags(e.target.value)} placeholder="标签，用逗号分隔（如：机械,材料）" />
+              </div>
+              <div className="form-group">
+                <input type="file" accept=".ppt,.pptx,.pdf" ref={fileRef}
+                  onChange={e => setCwFile(e.target.files?.[0] || null)} />
+              </div>
+              <button className="btn btn-primary" onClick={upload}
+                disabled={!cwTitle || !cwDate || !cwFile || cwUploading}>
+                {cwUploading ? '上传中…' : '上传'}
+              </button>
+              {cwMsg && <p style={{ marginTop: '12px', fontSize: '0.85rem', color: 'var(--accent-red)' }}>{cwMsg}</p>}
             </div>
-            <div className="form-group">
-              <input type="date" value={cwDate} onChange={e => setCwDate(e.target.value)} />
+
+            <div className="admin-courseware-heading">
+              <div>
+                <h2>当前课件</h2>
+                <p>核对课件信息，错误上传可在这里撤销。</p>
+              </div>
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={() => void loadCourseware()}
+                disabled={cwListLoading || deletingCoursewareId !== null}
+              >
+                {cwListLoading ? '刷新中…' : '刷新列表'}
+              </button>
             </div>
-            <div className="form-group">
-              <input value={cwDesc} onChange={e => setCwDesc(e.target.value)} placeholder="简介（可选）" />
-            </div>
-            <div className="form-group">
-              <input value={cwTags} onChange={e => setCwTags(e.target.value)} placeholder="标签，用逗号分隔（如：机械,材料）" />
-            </div>
-            <div className="form-group">
-              <input type="file" accept=".ppt,.pptx,.pdf" ref={fileRef}
-                onChange={e => setCwFile(e.target.files?.[0] || null)} />
-            </div>
-            <button className="btn btn-primary" onClick={upload}
-              disabled={!cwTitle || !cwDate || !cwFile}>上传</button>
-            {cwMsg && <p style={{ marginTop: '12px', fontSize: '0.85rem', color: 'var(--accent-red)' }}>{cwMsg}</p>}
-          </div>
+
+            {cwActionError && (
+              <div className="list-feedback list-feedback-error">
+                <p>{cwActionError}</p>
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={() => void loadCourseware()}
+                  disabled={cwListLoading || deletingCoursewareId !== null}
+                >
+                  手动刷新
+                </button>
+              </div>
+            )}
+
+            {!cwListLoaded ? (
+              cwListLoading ? (
+                <div className="loading" />
+              ) : (
+                <div className="list-feedback list-feedback-error">
+                  <p>{cwListError}</p>
+                  <button className="btn btn-outline btn-sm" onClick={() => void loadCourseware()}>
+                    重新加载
+                  </button>
+                </div>
+              )
+            ) : (
+              <>
+                {cwListError && (
+                  <div className="list-feedback list-feedback-error">
+                    <p>{cwListError}</p>
+                    <button className="btn btn-outline btn-sm" onClick={() => void loadCourseware()}>
+                      重试
+                    </button>
+                  </div>
+                )}
+
+                {courseware.length === 0 ? (
+                  <div className="empty">
+                    <p style={{ fontWeight: 500 }}>暂无课件</p>
+                  </div>
+                ) : (
+                  <div className="admin-courseware-list">
+                    {courseware.map(item => {
+                      const file = getCoursewareFile(item)
+                      return (
+                        <div key={item.id} className="card admin-courseware-item">
+                          <div className="admin-courseware-info">
+                            <h3>{item.title}</h3>
+                            <div className="admin-courseware-meta">
+                              <span className="tag">📅 {item.date}</span>
+                              {item.tags?.split(/[,，]/).filter(Boolean).map(tag => (
+                                <span key={tag} className="tag">{tag.trim()}</span>
+                              ))}
+                            </div>
+                            <p className="admin-courseware-file">
+                              <strong>{file.fileType}</strong>
+                              {file.fileName || '文件信息不可用'}
+                            </p>
+                          </div>
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() => void deleteCourseware(item)}
+                            disabled={deletingCoursewareId !== null}
+                          >
+                            {deletingCoursewareId === item.id ? '删除中…' : '删除'}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </>
         )}
       </div>
     </div>

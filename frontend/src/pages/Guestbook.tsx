@@ -1,15 +1,55 @@
-import { useState, useEffect } from 'react'
-import { API_BASE_URL } from '../config/runtime'
+import { useState, useEffect, useRef } from 'react'
 import { getPublicApiError, publicRequest } from '../config/publicApi'
+import { loadJson } from '../config/listApi'
 
-interface Reply { id: number; author: string; content: string; created_at: string; reactions: string }
-interface Msg { id: number; author: string; content: string; created_at: string; replies: Reply[]; reactions: string }
+interface Reply { id: number; author: string; content: string; created_at: string; reactions?: string }
+interface Msg { id: number; author: string; content: string; created_at: string; replies: Reply[]; reactions?: string }
+interface MessagePage { messages: Msg[]; total: number }
+
+function isReply(value: unknown): value is Reply {
+  if (!value || typeof value !== 'object') return false
+  const reply = value as Record<string, unknown>
+  return (
+    Number.isInteger(reply.id)
+    && typeof reply.author === 'string'
+    && typeof reply.content === 'string'
+    && typeof reply.created_at === 'string'
+    && (reply.reactions === undefined || typeof reply.reactions === 'string')
+  )
+}
+
+function isMessage(value: unknown): value is Msg {
+  if (!value || typeof value !== 'object') return false
+  const message = value as Record<string, unknown>
+  return (
+    Number.isInteger(message.id)
+    && typeof message.author === 'string'
+    && typeof message.content === 'string'
+    && typeof message.created_at === 'string'
+    && Array.isArray(message.replies)
+    && message.replies.every(isReply)
+    && (message.reactions === undefined || typeof message.reactions === 'string')
+  )
+}
+
+function isMessagePage(value: unknown): value is MessagePage {
+  if (!value || typeof value !== 'object') return false
+  const page = value as Record<string, unknown>
+  return (
+    Array.isArray(page.messages)
+    && page.messages.every(isMessage)
+    && Number.isInteger(page.total)
+    && Number(page.total) >= 0
+  )
+}
 
 const EMOJIS = ['👍', '❤️', '😄', '🎉', '😢', '🔥', '💡', '👏']
 
 export default function Guestbook() {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [loading, setLoading] = useState(true)
+  const [hasLoaded, setHasLoaded] = useState(false)
+  const [listError, setListError] = useState('')
   const [author, setAuthor] = useState('')
   const [content, setContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -20,14 +60,64 @@ export default function Guestbook() {
   const [toastError, setToastError] = useState(false)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  const requestIdRef = useRef(0)
+  const requestControllerRef = useRef<AbortController | null>(null)
 
-  const fetchMsgs = (p = 1) => {
-    fetch(`${API_BASE_URL}/guestbook/messages?page=${p}`)
-      .then(r => r.json())
-      .then(d => { setMsgs(d.messages); setTotal(d.total); setLoading(false) })
-      .catch(() => setLoading(false))
+  const fetchMsgs = async (
+    targetPage = 1,
+  ): Promise<'success' | 'failed' | 'ignored'> => {
+    const requestId = requestIdRef.current + 1
+    requestIdRef.current = requestId
+    requestControllerRef.current?.abort()
+    const controller = new AbortController()
+    requestControllerRef.current = controller
+    setLoading(true)
+    setListError('')
+
+    const result = await loadJson(
+      {
+        request: signal => publicRequest(
+          `/guestbook/messages?page=${targetPage}`,
+          { signal },
+        ),
+        validate: isMessagePage,
+        getHttpError: response => getPublicApiError(
+          response,
+          '留言服务暂时不可用，请稍后重试',
+        ),
+        invalidMessage: '服务器返回的留言数据格式异常，请稍后重试',
+        networkMessage: '无法连接留言服务，请检查网络后重试',
+      },
+      controller.signal,
+    )
+
+    if (
+      requestId !== requestIdRef.current
+      || (!result.ok && result.kind === 'aborted')
+    ) {
+      return 'ignored'
+    }
+
+    if (result.ok) {
+      setMsgs(result.data.messages)
+      setTotal(result.data.total)
+      setPage(targetPage)
+      setHasLoaded(true)
+      setLoading(false)
+      return 'success'
+    }
+
+    setListError(result.message)
+    setLoading(false)
+    return 'failed'
   }
-  useEffect(() => { fetchMsgs() }, [])
+  useEffect(() => {
+    void fetchMsgs()
+    return () => {
+      requestIdRef.current += 1
+      requestControllerRef.current?.abort()
+    }
+  }, [])
 
   const showToast = (m: string, error = false) => {
     setToastError(error)
@@ -55,16 +145,18 @@ export default function Guestbook() {
       }
       if (pid) { setReplyTo(null); setRContent(''); setRAuthor('') }
       else { setContent(''); setAuthor('') }
-      fetchMsgs(page)
-      showToast('留言成功 ✨')
+      const refreshResult = await fetchMsgs(page)
+      if (refreshResult === 'failed') {
+        showToast('留言成功，但列表刷新失败，请手动重试', true)
+      } else {
+        showToast('留言成功 ✨')
+      }
     } catch {
       showToast('网络错误，请稍后再试', true)
     } finally { setSubmitting(false) }
   }
 
   const totalPages = Math.ceil(total / 20)
-
-  if (loading) return <div className="loading" />
 
   return (
     <div>
@@ -99,17 +191,41 @@ export default function Guestbook() {
         {/* 装饰分隔 */}
         <div className="ornament"><span>✦ 大家的留言 ✦</span></div>
 
-        {msgs.length === 0 ? (
-          <div className="empty">
-            <div style={{ fontSize: '3rem', marginBottom: '12px' }}>💭</div>
-            <p style={{ fontWeight: 600 }}>还没有留言</p>
-            <p style={{ color: 'var(--ink-lighter)', fontSize: '0.85rem' }}>
-              来做第一个发言的人吧
-            </p>
-          </div>
+        {!hasLoaded ? (
+          loading ? (
+            <div className="loading" />
+          ) : (
+            <div className="list-feedback list-feedback-error">
+              <p>{listError}</p>
+              <button className="btn btn-outline btn-sm" onClick={() => void fetchMsgs(page)}>
+                重新加载
+              </button>
+            </div>
+          )
         ) : (
           <>
-            {msgs.map((m, i) => (
+            {(listError || loading) && (
+              <div className={`list-feedback ${listError ? 'list-feedback-error' : ''}`}>
+                <p>{listError || '正在刷新留言列表…'}</p>
+                {listError && (
+                  <button className="btn btn-outline btn-sm" onClick={() => void fetchMsgs(page)}>
+                    重试
+                  </button>
+                )}
+              </div>
+            )}
+
+            {msgs.length === 0 ? (
+              <div className="empty">
+                <div style={{ fontSize: '3rem', marginBottom: '12px' }}>💭</div>
+                <p style={{ fontWeight: 600 }}>还没有留言</p>
+                <p style={{ color: 'var(--ink-lighter)', fontSize: '0.85rem' }}>
+                  来做第一个发言的人吧
+                </p>
+              </div>
+            ) : (
+              <>
+                {msgs.map((m, i) => (
               <div key={m.id} className="card" style={{
                 animation: `fadeIn 0.4s ${i * 50}ms both`,
               }}>
@@ -142,8 +258,8 @@ export default function Guestbook() {
                 {/* 表情反应 */}
                 <ReactionBar
                   msgId={m.id}
-                  reactions={m.reactions}
-                  onReacted={() => fetchMsgs(page)}
+                  reactions={m.reactions || ''}
+                  onReacted={() => { void fetchMsgs(page) }}
                   onError={message => showToast(message, true)}
                 />
 
@@ -196,21 +312,23 @@ export default function Guestbook() {
                     onClick={() => setReplyTo(m.id)}>💬 回复</button>
                 )}
               </div>
-            ))}
-
-            {totalPages > 1 && (
-              <div style={{
-                textAlign: 'center', marginTop: '28px',
-                display: 'flex', gap: '8px', justifyContent: 'center',
-              }}>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
-                  <button key={p}
-                    className={`btn btn-sm ${p === page ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() => { setPage(p); fetchMsgs(p) }}>
-                    {p}
-                  </button>
                 ))}
-              </div>
+
+                {totalPages > 1 && (
+                  <div style={{
+                    textAlign: 'center', marginTop: '28px',
+                    display: 'flex', gap: '8px', justifyContent: 'center',
+                  }}>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                      <button key={p}
+                        className={`btn btn-sm ${p === page ? 'btn-primary' : 'btn-outline'}`}
+                        onClick={() => void fetchMsgs(p)}>
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

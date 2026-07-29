@@ -1,10 +1,8 @@
-import { useState, useEffect } from 'react'
-import { API_BASE_URL, getUploadedFileUrl } from '../config/runtime'
-
-interface CW {
-  id: number; title: string; date: string; description: string
-  pdf_path: string; pptx_path: string; tags: string
-}
+import { useState, useEffect, useRef } from 'react'
+import { getUploadedFileUrl } from '../config/runtime'
+import { getPublicApiError, publicRequest } from '../config/publicApi'
+import { loadJson } from '../config/listApi'
+import { isCoursewareList, type CoursewareItem } from '../types/courseware'
 
 const ALL_TAGS = ['全部', '机械', '计算机', '材料', '自动化', '经管', '理科', '文科', '高考政策', '其他']
 
@@ -113,30 +111,72 @@ function PDFViewer({ url, title }: { url: string; title: string }) {
 }
 
 export default function Courseware() {
-  const [items, setItems] = useState<CW[]>([])
+  const [items, setItems] = useState<CoursewareItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [selected, setSelected] = useState<CW | null>(null)
+  const [hasLoaded, setHasLoaded] = useState(false)
+  const [listError, setListError] = useState('')
+  const [selected, setSelected] = useState<CoursewareItem | null>(null)
   const [activeTag, setActiveTag] = useState('全部')
   const [viewedIds] = useState(getViewed)
+  const requestIdRef = useRef(0)
+  const requestControllerRef = useRef<AbortController | null>(null)
 
-  const fetchItems = (tag?: string) => {
+  const fetchItems = async (tag = '全部') => {
+    const requestId = requestIdRef.current + 1
+    requestIdRef.current = requestId
+    requestControllerRef.current?.abort()
+    const controller = new AbortController()
+    requestControllerRef.current = controller
     setLoading(true)
-    const url = tag && tag !== '全部'
-      ? `${API_BASE_URL}/courseware/list?tag=${encodeURIComponent(tag)}`
-      : `${API_BASE_URL}/courseware/list`
-    fetch(url)
-      .then(r => r.json())
-      .then(d => { setItems(d); setLoading(false) })
-      .catch(() => setLoading(false))
-  }
-  useEffect(() => { fetchItems() }, [])
+    setListError('')
+    const path = tag && tag !== '全部'
+      ? `/courseware/list?tag=${encodeURIComponent(tag)}`
+      : '/courseware/list'
+    const result = await loadJson(
+      {
+        request: signal => publicRequest(path, { signal }),
+        validate: isCoursewareList,
+        getHttpError: response => getPublicApiError(
+          response,
+          '课件服务暂时不可用，请稍后重试',
+        ),
+        invalidMessage: '服务器返回的课件数据格式异常，请稍后重试',
+        networkMessage: '无法连接课件服务，请检查网络后重试',
+      },
+      controller.signal,
+    )
 
-  const openItem = (item: CW) => {
+    if (
+      requestId !== requestIdRef.current
+      || (!result.ok && result.kind === 'aborted')
+    ) {
+      return false
+    }
+
+    if (result.ok) {
+      setItems(result.data)
+      setActiveTag(tag)
+      setHasLoaded(true)
+      setLoading(false)
+      return true
+    }
+
+    setListError(result.message)
+    setLoading(false)
+    return false
+  }
+  useEffect(() => {
+    void fetchItems()
+    return () => {
+      requestIdRef.current += 1
+      requestControllerRef.current?.abort()
+    }
+  }, [])
+
+  const openItem = (item: CoursewareItem) => {
     setSelected(item)
     addViewed(item.id)
   }
-
-  if (loading) return <div className="loading" />
 
   return (
     <div>
@@ -198,18 +238,35 @@ export default function Courseware() {
           </div>
         ) : (
           <>
-            {items.length === 0 ? (
-              <div className="empty">
-                <div style={{ fontSize: '3rem', marginBottom: '12px' }}>📭</div>
-                <p style={{ fontWeight: 600 }}>{activeTag !== '全部' ? `暂无"${activeTag}"标签的课件` : '暂无课件'}</p>
-              </div>
+            {!hasLoaded ? (
+              loading ? (
+                <div className="loading" />
+              ) : (
+                <div className="list-feedback list-feedback-error">
+                  <p>{listError}</p>
+                  <button className="btn btn-outline btn-sm" onClick={() => void fetchItems(activeTag)}>
+                    重新加载
+                  </button>
+                </div>
+              )
             ) : (
               <>
+                {(listError || loading) && (
+                  <div className={`list-feedback ${listError ? 'list-feedback-error' : ''}`}>
+                    <p>{listError || '正在刷新课件列表…'}</p>
+                    {listError && (
+                      <button className="btn btn-outline btn-sm" onClick={() => void fetchItems(activeTag)}>
+                        重试
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '24px', justifyContent: 'center' }}>
                   {ALL_TAGS.map(t => (
                     <button key={t}
                       className={`btn btn-sm ${activeTag === t ? 'btn-primary' : 'btn-outline'}`}
-                      onClick={() => { setActiveTag(t); fetchItems(t) }}
+                      onClick={() => void fetchItems(t)}
                       style={{ borderRadius: '20px' }}>
                       {t}
                     </button>
@@ -220,52 +277,59 @@ export default function Courseware() {
                   {activeTag === '全部' ? '全部课件' : `标签：${activeTag}`}
                 </div>
 
-                {items.map((item, i) => {
-                  const isViewed = viewedIds.includes(item.id)
-                  return (
-                    <div key={item.id} className="card"
-                      onClick={() => openItem(item)}
-                      style={{
-                        cursor: 'pointer', display: 'flex', justifyContent: 'space-between',
-                        alignItems: 'center', animation: `fadeIn 0.4s ${i * 50}ms both`,
-                        ...(isViewed ? { opacity: 0.7 } : {}),
-                      }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1 }}>
-                        <div style={{
-                          width: '48px', height: '48px', borderRadius: 'var(--radius-sm)',
-                          background: 'linear-gradient(135deg, var(--accent-glow), var(--gold-light))',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: '1.4rem', flexShrink: 0, position: 'relative',
+                {items.length === 0 ? (
+                  <div className="empty">
+                    <div style={{ fontSize: '3rem', marginBottom: '12px' }}>📭</div>
+                    <p style={{ fontWeight: 600 }}>{activeTag !== '全部' ? `暂无"${activeTag}"标签的课件` : '暂无课件'}</p>
+                  </div>
+                ) : (
+                  items.map((item, i) => {
+                    const isViewed = viewedIds.includes(item.id)
+                    return (
+                      <div key={item.id} className="card"
+                        onClick={() => openItem(item)}
+                        style={{
+                          cursor: 'pointer', display: 'flex', justifyContent: 'space-between',
+                          alignItems: 'center', animation: `fadeIn 0.4s ${i * 50}ms both`,
+                          ...(isViewed ? { opacity: 0.7 } : {}),
                         }}>
-                          📖
-                          {isViewed && (
-                            <span style={{
-                              position: 'absolute', top: '-4px', right: '-4px',
-                              background: 'var(--green)', color: 'white', fontSize: '0.5rem',
-                              width: '16px', height: '16px', borderRadius: '50%',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            }}>✓</span>
-                          )}
-                        </div>
-                        <div>
-                          <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1rem', fontWeight: 700, color: 'var(--ink)', marginBottom: '4px' }}>
-                            {item.title}
-                            {isViewed && <span style={{ fontSize: '0.7rem', color: 'var(--green)', fontWeight: 400, marginLeft: '6px' }}>已读</span>}
-                          </h3>
-                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-                            <span className="tag">📅 {item.date}</span>
-                            {item.tags && item.tags.split(/[,，]/).map((t: string) => (
-                              <span key={t} className="tag" style={{ background: 'var(--accent-glow)', color: 'var(--accent)', fontSize: '0.7rem' }}>
-                                {t.trim()}
-                              </span>
-                            ))}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1 }}>
+                          <div style={{
+                            width: '48px', height: '48px', borderRadius: 'var(--radius-sm)',
+                            background: 'linear-gradient(135deg, var(--accent-glow), var(--gold-light))',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: '1.4rem', flexShrink: 0, position: 'relative',
+                          }}>
+                            📖
+                            {isViewed && (
+                              <span style={{
+                                position: 'absolute', top: '-4px', right: '-4px',
+                                background: 'var(--green)', color: 'white', fontSize: '0.5rem',
+                                width: '16px', height: '16px', borderRadius: '50%',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              }}>✓</span>
+                            )}
+                          </div>
+                          <div>
+                            <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1rem', fontWeight: 700, color: 'var(--ink)', marginBottom: '4px' }}>
+                              {item.title}
+                              {isViewed && <span style={{ fontSize: '0.7rem', color: 'var(--green)', fontWeight: 400, marginLeft: '6px' }}>已读</span>}
+                            </h3>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                              <span className="tag">📅 {item.date}</span>
+                              {item.tags && item.tags.split(/[,，]/).map((t: string) => (
+                                <span key={t} className="tag" style={{ background: 'var(--accent-glow)', color: 'var(--accent)', fontSize: '0.7rem' }}>
+                                  {t.trim()}
+                                </span>
+                              ))}
+                            </div>
                           </div>
                         </div>
+                        <span style={{ color: 'var(--ink-lighter)', fontSize: '1.2rem', fontWeight: 300, flexShrink: 0, marginLeft: '12px' }}>›</span>
                       </div>
-                      <span style={{ color: 'var(--ink-lighter)', fontSize: '1.2rem', fontWeight: 300, flexShrink: 0, marginLeft: '12px' }}>›</span>
-                    </div>
-                  )
-                })}
+                    )
+                  })
+                )}
               </>
             )}
           </>
