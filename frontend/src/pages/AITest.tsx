@@ -173,7 +173,7 @@ export default function AITest() {
               发现你的专业性格
             </h2>
             <p style={{ color: 'var(--ink-light)', fontSize: '0.9rem', lineHeight: 1.7, marginBottom: '8px' }}>
-              50 道精心设计的题目，从六个维度分析你的兴趣和能力倾向
+              50 道趣味题目，从六个维度帮助你整理兴趣方向
             </p>
             <div style={{
               display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px',
@@ -189,6 +189,11 @@ export default function AITest() {
             <p style={{ color: 'var(--ink-lighter)', fontSize: '0.82rem', marginBottom: '24px' }}>
               约需 8-12 分钟完成 · AI 为你生成个性化分析报告
             </p>
+            <div className="blockquote-decorated" style={{ textAlign: 'left', marginBottom: '24px', fontSize: '0.82rem' }}>
+              这是趣味兴趣探索，不属于心理测评、能力测评或升学诊断。50道原始选择仅保留在当前页面，
+              网站只向后端提交六维分数并交由第三方AI分析。结果可能出错，仅供参考。
+              详见 <Link to="/privacy">隐私说明</Link>。
+            </div>
             <button className="btn btn-primary" onClick={() => setStarted(true)}
               style={{ padding: '14px 40px', fontSize: '1rem' }}>
               开始测试 →
@@ -205,6 +210,9 @@ export default function AITest() {
         <div className="loading">
           <p style={{ fontSize: '1.2rem', fontWeight: 600 }}>AI 正在分析你的性格特点...</p>
           <p style={{ color: 'var(--ink-lighter)', fontSize: '0.85rem' }}>请稍等片刻</p>
+          <p style={{ color: 'var(--ink-lighter)', fontSize: '0.78rem', marginTop: '10px' }}>
+            正在将六维结果交由第三方AI生成趣味分析，不发送50道原始选择或身份信息。
+          </p>
         </div>
       </div>
     )
@@ -256,6 +264,9 @@ export default function AITest() {
         </div>
         <div className="container" style={{ maxWidth: '760px' }}>
           <div className="card" style={{ padding: '32px' }}>
+            <div className="blockquote-decorated" style={{ marginBottom: '20px', fontSize: '0.82rem' }}>
+              本报告是AI生成的趣味兴趣探索结果，可能出错，不属于心理测评、能力测评或升学诊断。
+            </div>
             <div className="markdown-body">
               <ReactMarkdown>{result}</ReactMarkdown>
             </div>
@@ -294,9 +305,11 @@ export default function AITest() {
             borderRadius: '2px', overflow: 'hidden',
           }}>
             <div style={{
-              width: `${progress}%`, height: '100%',
+              width: '100%', height: '100%',
               background: 'linear-gradient(90deg, var(--accent), var(--gold))',
-              borderRadius: '2px', transition: 'width 0.3s',
+              borderRadius: '2px', transition: 'transform 0.3s',
+              transform: `scaleX(${progress / 100})`,
+              transformOrigin: 'left center',
             }} />
           </div>
         </div>

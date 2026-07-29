@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { getPublicApiError, publicRequest } from '../config/publicApi'
 import { loadJson } from '../config/listApi'
 
@@ -174,6 +175,10 @@ export default function Guestbook() {
           background: 'linear-gradient(135deg, var(--paper) 0%, var(--cream) 100%)',
         }}>
           <div className="section-title">写留言</div>
+          <div className="blockquote-decorated" style={{ marginBottom: '16px', fontSize: '0.82rem' }}>
+            昵称、留言、回复和时间会公开展示。请勿填写个人联系方式或其他敏感信息。
+            详见 <Link to="/privacy">隐私说明</Link>。
+          </div>
           <div className="form-group">
             <input value={author} onChange={e => setAuthor(e.target.value)}
               placeholder="你的昵称（可选）" />
@@ -268,7 +273,7 @@ export default function Guestbook() {
                   <div key={rp.id} style={{
                     marginTop: '14px', marginLeft: '16px',
                     padding: '14px 18px', background: 'var(--cream-dark)',
-                    borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--accent)',
+                    borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-light)',
                   }}>
                     <div style={{ display: 'flex', gap: '8px', marginBottom: '4px' }}>
                       <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>{rp.author}</span>

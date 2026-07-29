@@ -1,10 +1,6 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { getPublicApiError, publicRequest } from '../config/publicApi'
-
-const MEMBERS = [
-  { name: '待填写', major: '待填写', wechat: '待填写', intro: '团队成员介绍待补充', avatar: '' },
-  { name: '待填写', major: '待填写', wechat: '待填写', intro: '团队成员介绍待补充', avatar: '' },
-]
 
 export default function Contact() {
   const [name, setName] = useState('')
@@ -26,7 +22,7 @@ export default function Contact() {
         body: JSON.stringify({ name: name.trim(), contact_info: contact.trim(), message: message.trim() }),
       })
       if (r.ok) {
-        showToast('发送成功！我们会尽快联系你 ✨')
+        showToast('发送成功，实践团管理员会查看这条留言 ✨')
         setName(''); setContact(''); setMessage('')
       } else setMsg(await getPublicApiError(r, '发送失败，请稍后再试'))
     } catch {
@@ -40,63 +36,10 @@ export default function Contact() {
 
       <div className="page-header">
         <h1>联系我们</h1>
-        <p>想深入了解北科？直接联系学长学姐</p>
+        <p>通过仅管理员可见的表单联系实践团</p>
       </div>
 
       <div className="container">
-        {/* 团队成员 */}
-        <div className="section-title">团队成员</div>
-        <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
-          gap: '16px', marginBottom: '48px',
-        }}>
-          {MEMBERS.map((m, i) => (
-            <div key={i} className="card" style={{
-              textAlign: 'center', padding: '32px 20px',
-              animation: `fadeIn 0.4s ${i * 80}ms both`,
-            }}>
-              {m.avatar ? (
-                <img src={m.avatar} alt={m.name} style={{
-                  width: '64px', height: '64px', borderRadius: '50%',
-                  objectFit: 'cover', margin: '0 auto 16px',
-                  boxShadow: '0 4px 16px rgba(61,50,38,0.12)',
-                  border: '3px solid var(--paper)',
-                }} />
-              ) : (
-                <div style={{
-                  width: '64px', height: '64px', borderRadius: '50%',
-                  background: 'linear-gradient(135deg, var(--accent-glow), var(--gold-light))',
-                  color: 'var(--accent)', display: 'flex',
-                  alignItems: 'center', justifyContent: 'center',
-                  margin: '0 auto 16px', fontSize: '1.5rem', fontWeight: 700,
-                  boxShadow: '0 4px 16px rgba(61,50,38,0.1)',
-                  border: '3px solid var(--paper)',
-                }}>
-                  {m.name[0]}
-                </div>
-              )}
-              <h3 style={{
-                fontFamily: 'var(--font-serif)', fontSize: '1.05rem',
-                fontWeight: 700, color: 'var(--ink)', marginBottom: '4px',
-              }}>
-                {m.name}
-              </h3>
-              <p style={{ color: 'var(--accent)', fontSize: '0.84rem', fontWeight: 500, marginBottom: '6px' }}>
-                {m.major}
-              </p>
-              <span className="tag">💬 微信：{m.wechat}</span>
-              <p style={{
-                marginTop: '12px', fontSize: '0.85rem', color: 'var(--ink-light)',
-                lineHeight: 1.55,
-              }}>
-                {m.intro}
-              </p>
-            </div>
-          ))}
-        </div>
-
-        <div className="ornament"><span>✦ 给我们留言 ✦</span></div>
-
         {/* 留言表单 */}
         <div className="card" style={{
           padding: '32px',
@@ -112,10 +55,16 @@ export default function Contact() {
             </h2>
           </div>
           <p style={{ color: 'var(--ink-light)', fontSize: '0.86rem', marginBottom: '22px' }}>
-            想深入了解某个专业或有其他问题？请留言给我们
+            想深入了解活动或申请删除此前提交的联系记录，都可以在这里留言。
           </p>
+          <div className="blockquote-decorated" style={{ marginBottom: '18px', fontSize: '0.82rem' }}>
+            表单内容仅管理员可见，并按90天规则自动清理；停机或故障期间可能延迟，恢复后补清。
+            请勿提交身份证号、家庭住址等敏感信息。删除申请请提供大致提交时间、当时的称呼和内容线索，
+            不需要提供身份证件。详见 <Link to="/privacy">隐私说明</Link>。
+          </div>
           <div className="form-group">
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="你的姓名" />
+            <input value={name} onChange={e => setName(e.target.value)}
+              placeholder="称呼（必填，可以填写昵称）" />
           </div>
           <div className="form-group">
             <input value={contact} onChange={e => setContact(e.target.value)}

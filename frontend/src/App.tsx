@@ -7,9 +7,10 @@ import Guestbook from './pages/Guestbook'
 import QandA from './pages/QandA'
 import Explore from './pages/Explore'
 import AITest from './pages/AITest'
-import Scores from './pages/Scores'
 import Contact from './pages/Contact'
 import Admin from './pages/Admin'
+import Privacy from './pages/Privacy'
+import NotFound from './pages/NotFound'
 
 function BackToTop() {
   const [visible, setVisible] = useState(false)
@@ -50,14 +51,20 @@ function App() {
           <Route path="/qanda" element={<QandA />} />
           <Route path="/explore" element={<Explore />} />
           <Route path="/aitest" element={<AITest />} />
-          <Route path="/scores" element={<Scores />} />
           <Route path="/contact" element={<Contact />} />
+          <Route path="/privacy" element={<Privacy />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
       <BackToTop />
       <footer className="footer">
-        <p>北京科技大学 躬行启杭专业科普体验实践团 © 2026 | 学军中学紫金港校区</p>
+        <p>
+          躬行启杭专业科普体验夏令营 © 2026
+          {' | '}主办：北京科技大学
+          {' | '}协办：浙江省杭州学军中学
+          {' | '}<a href="/privacy">隐私说明</a>
+        </p>
       </footer>
     </>
   )
