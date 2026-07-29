@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -9,18 +11,30 @@ from config import (
     UVICORN_PROXY_HEADERS,
 )
 from cors_config import configure_cors
+from contact_retention import ContactRetentionWorker
 from database import init_db
 from file_storage import prepare_storage
 from routes import admin, contact, courseware, files, guestbook, qanda
 
-# 初始化数据库
-init_db()
-prepare_storage()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    prepare_storage()
+
+    worker = ContactRetentionWorker()
+    app.state.contact_retention_worker = worker
+    try:
+        worker.start()
+        yield
+    finally:
+        await worker.stop()
+        app.state.contact_retention_worker = None
 
 app = FastAPI(
     title="躬行启杭 - 学军中学交流平台",
     description="北京科技大学躬行启杭专业科普体验实践团",
     version="1.0.0",
+    lifespan=lifespan,
 )
 app.add_middleware(VisitorIdentityMiddleware)
 

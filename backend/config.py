@@ -5,7 +5,10 @@ from urllib.parse import urlsplit
 from dotenv import load_dotenv
 from origin_normalization import normalize_origin
 
-load_dotenv()
+# 测试必须完全依赖调用方预先注入的隔离配置，不能读取项目真实 .env。
+_PRESET_APP_ENV = os.getenv("APP_ENV")
+if _PRESET_APP_ENV != "test":
+    load_dotenv()
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -183,7 +186,24 @@ else:
         os.path.join(PROJECT_ROOT, database_path_setting)
     )
 
-# 课件文件存储目录
+def _test_path_override(name: str, default: str) -> str:
+    raw_value = os.getenv(name)
+    if APP_ENV != "test":
+        return default
+    if not raw_value:
+        return default
+    if not os.path.isabs(raw_value):
+        raise RuntimeError(f"{name} 在 test 环境中必须是绝对路径")
+    return os.path.normpath(raw_value)
+
+
+# development/production 固定使用项目 data/；test 可在导入前注入隔离路径。
 COURSEWARE_DIR = os.path.join(PROJECT_ROOT, "data", "courseware")
-UPLOADS_DIR = os.path.join(PROJECT_ROOT, "data", "uploads")
-COURSEWARE_TEMP_DIR = os.path.join(PROJECT_ROOT, "data", "tmp", "courseware")
+UPLOADS_DIR = _test_path_override(
+    "UPLOADS_DIR",
+    os.path.join(PROJECT_ROOT, "data", "uploads"),
+)
+COURSEWARE_TEMP_DIR = _test_path_override(
+    "COURSEWARE_TEMP_DIR",
+    os.path.join(PROJECT_ROOT, "data", "tmp", "courseware"),
+)

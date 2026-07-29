@@ -2,9 +2,6 @@ import sqlite3
 import os
 from config import DATABASE_PATH
 
-# 确保数据目录存在
-os.makedirs(os.path.dirname(os.path.abspath(DATABASE_PATH)), exist_ok=True)
-
 
 def get_db():
     """获取数据库连接"""
@@ -17,6 +14,8 @@ def get_db():
 
 def init_db():
     """初始化数据库表"""
+    # 目录创建属于显式初始化，不在模块导入阶段触碰真实数据路径。
+    os.makedirs(os.path.dirname(os.path.abspath(DATABASE_PATH)), exist_ok=True)
     conn = get_db()
     cursor = conn.cursor()
 
