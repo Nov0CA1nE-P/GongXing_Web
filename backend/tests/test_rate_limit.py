@@ -359,6 +359,24 @@ class PublicRouteIntegrationTests(unittest.TestCase):
         self.assertEqual(blocked.headers["retry-after"], "3600")
         self.assertEqual(blocked.headers["cache-control"], "no-store")
 
+    def test_initial_question_sends_only_question_text_to_ai(self):
+        question = "我想了解材料专业会学习什么？"
+        author = "不应发送的昵称"
+        with patch.object(
+            qanda_routes,
+            "ask_deepseek",
+            AsyncMock(return_value="待审核回答"),
+        ) as mocked_ai:
+            response = self.client.post(
+                "/api/qanda/questions",
+                json={"author": author, "content": question},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        mocked_ai.assert_awaited_once_with(question)
+        sent_text = mocked_ai.await_args.args[0]
+        self.assertNotIn(author, sent_text)
+        self.assertNotIn("visitor_rl", sent_text)
+
     def test_parent_id_boundaries_do_not_consume_or_write(self):
         for parent_id in (0, -1):
             with self.subTest(parent_id=parent_id):

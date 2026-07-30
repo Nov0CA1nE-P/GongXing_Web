@@ -2,7 +2,10 @@ import { useState, useEffect, useRef } from 'react'
 import { getUploadedFileUrl } from '../config/runtime'
 import { getPublicApiError, publicRequest } from '../config/publicApi'
 import { loadJson } from '../config/listApi'
-import { isCoursewareList, type CoursewareItem } from '../types/courseware'
+import {
+  isPublicCoursewareList,
+  type PublicCoursewareItem,
+} from '../types/courseware'
 
 const ALL_TAGS = ['全部', '机械', '计算机', '材料', '自动化', '经管', '理科', '文科', '高考政策', '其他']
 
@@ -14,108 +17,44 @@ const addViewed = (id: number) => {
   localStorage.setItem('cw_viewed', JSON.stringify(v.slice(0, 10)))
 }
 
-// PDF 模拟翻页
 function PDFViewer({ url, title }: { url: string; title: string }) {
-  const [page, setPage] = useState(1)
-  const [totalPages] = useState(20) // 模拟总页数
-  const [animating, setAnimating] = useState(false)
-  const [direction, setDirection] = useState<'next' | 'prev'>('next')
-
-  const goPage = (dir: 'next' | 'prev') => {
-    if (animating) return
-    if (dir === 'next' && page >= totalPages) return
-    if (dir === 'prev' && page <= 1) return
-    setDirection(dir)
-    setAnimating(true)
-    setTimeout(() => {
-      setPage(p => dir === 'next' ? p + 1 : p - 1)
-      setAnimating(false)
-    }, 300)
-  }
-
   return (
     <div style={{ marginTop: '20px' }}>
-      {/* 翻页控制栏 */}
       <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        gap: '16px', marginBottom: '16px',
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+        gap: '10px', marginBottom: '16px', flexWrap: 'wrap',
         background: 'var(--cream-dark)', borderRadius: 'var(--radius-sm)',
         padding: '10px 20px',
       }}>
-        <button className="btn btn-outline btn-sm" onClick={() => goPage('prev')} disabled={page <= 1}>
-          ← 上一页
-        </button>
-        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--ink)', minWidth: '80px', textAlign: 'center' }}>
-          第 {page} / {totalPages} 页
-        </span>
-        <button className="btn btn-outline btn-sm" onClick={() => goPage('next')} disabled={page >= totalPages}>
-          下一页 →
-        </button>
         <a href={url} target="_blank" rel="noopener noreferrer"
-          className="btn btn-primary btn-sm" style={{ marginLeft: '12px' }}>
-          🔗 新窗口打开
+          className="btn btn-outline btn-sm">
+          新窗口查看
+        </a>
+        <a href={url} download className="btn btn-primary btn-sm">
+          下载 PDF
         </a>
       </div>
 
-      {/* PDF 预览 + 翻页动画 */}
       <div style={{
-        position: 'relative', overflow: 'hidden',
         border: '1px solid var(--border-light)', borderRadius: 'var(--radius)',
         height: '640px', background: '#f0ede6',
       }}>
-        <div style={{
-          opacity: animating ? 0 : 1,
-          transform: animating ? `translateX(${direction === 'next' ? '-40px' : '40px'})` : 'translateX(0)',
-          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          width: '100%', height: '100%',
-        }}>
-          <iframe
-            src={`${url}#page=${page}`}
-            style={{ width: '100%', height: '100%', border: 'none' }}
-            title={title}
-          />
-        </div>
-
-        {/* 翻页提示箭头 */}
-        {page > 1 && (
-          <div onClick={() => goPage('prev')} style={{
-            position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)',
-            width: '48px', height: '72px', background: 'rgba(255,255,255,0.85)',
-            borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', fontSize: '1.4rem', color: 'var(--ink-light)',
-            boxShadow: '0 2px 12px rgba(0,0,0,0.08)', transition: 'all 0.2s',
-            opacity: 0.6,
-          }}
-          onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-          onMouseLeave={e => (e.currentTarget.style.opacity = '0.6')}>
-            ‹
-          </div>
-        )}
-        {page < totalPages && (
-          <div onClick={() => goPage('next')} style={{
-            position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
-            width: '48px', height: '72px', background: 'rgba(255,255,255,0.85)',
-            borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', fontSize: '1.4rem', color: 'var(--ink-light)',
-            boxShadow: '0 2px 12px rgba(0,0,0,0.08)', transition: 'all 0.2s',
-            opacity: 0.6,
-          }}
-          onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-          onMouseLeave={e => (e.currentTarget.style.opacity = '0.6')}>
-            ›
-          </div>
-        )}
+        <iframe
+          src={url}
+          style={{ width: '100%', height: '100%', border: 'none' }}
+          title={title}
+        />
       </div>
     </div>
   )
 }
 
 export default function Courseware() {
-  const [items, setItems] = useState<CoursewareItem[]>([])
+  const [items, setItems] = useState<PublicCoursewareItem[]>([])
   const [loading, setLoading] = useState(true)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [listError, setListError] = useState('')
-  const [selected, setSelected] = useState<CoursewareItem | null>(null)
+  const [selected, setSelected] = useState<PublicCoursewareItem | null>(null)
   const [activeTag, setActiveTag] = useState('全部')
   const [viewedIds] = useState(getViewed)
   const requestIdRef = useRef(0)
@@ -135,7 +74,7 @@ export default function Courseware() {
     const result = await loadJson(
       {
         request: signal => publicRequest(path, { signal }),
-        validate: isCoursewareList,
+        validate: isPublicCoursewareList,
         getHttpError: response => getPublicApiError(
           response,
           '课件服务暂时不可用，请稍后重试',
@@ -173,7 +112,7 @@ export default function Courseware() {
     }
   }, [])
 
-  const openItem = (item: CoursewareItem) => {
+  const openItem = (item: PublicCoursewareItem) => {
     setSelected(item)
     addViewed(item.id)
   }
@@ -182,7 +121,7 @@ export default function Courseware() {
     <div>
       <div className="page-header">
         <h1>课件展示</h1>
-        <p>按日期或学科标签浏览课程课件，在线预览或下载原始文件</p>
+        <p>按学科标签浏览公开 PDF，支持在线查看和下载</p>
       </div>
 
       <div className="container">
@@ -198,7 +137,6 @@ export default function Courseware() {
                     {selected.title}
                   </h2>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
-                    <span className="tag">📅 {selected.date}</span>
                     {selected.tags && selected.tags.split(/[,，]/).map((t: string) => (
                       <span key={t} className="tag" style={{ background: 'var(--accent-glow)', color: 'var(--accent)' }}>
                         {t.trim()}
@@ -213,27 +151,10 @@ export default function Courseware() {
                 </div>
               )}
 
-              {selected.pdf_path ? (
-                <PDFViewer
-                  url={getUploadedFileUrl(selected.pdf_path)}
-                  title={selected.title}
-                />
-              ) : (
-                <div style={{ padding: '56px 20px', textAlign: 'center', border: '2px dashed var(--border)', borderRadius: 'var(--radius)', background: 'var(--cream-dark)', marginTop: '20px' }}>
-                  <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📄</div>
-                  <p style={{ fontWeight: 600, color: 'var(--ink-light)' }}>暂无在线预览</p>
-                  <p style={{ color: 'var(--ink-lighter)', fontSize: '0.85rem' }}>PPT 需转换为 PDF 后方可预览</p>
-                </div>
-              )}
-
-              {selected.pptx_path && (
-                <div style={{ marginTop: '20px', textAlign: 'center' }}>
-                  <a href={getUploadedFileUrl(selected.pptx_path)}
-                    className="btn btn-primary" download>
-                    📥 下载原始课件
-                  </a>
-                </div>
-              )}
+              <PDFViewer
+                url={getUploadedFileUrl(selected.pdf_path)}
+                title={selected.title}
+              />
             </div>
           </div>
         ) : (
@@ -316,7 +237,6 @@ export default function Courseware() {
                               {isViewed && <span style={{ fontSize: '0.7rem', color: 'var(--green)', fontWeight: 400, marginLeft: '6px' }}>已读</span>}
                             </h3>
                             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-                              <span className="tag">📅 {item.date}</span>
                               {item.tags && item.tags.split(/[,，]/).map((t: string) => (
                                 <span key={t} className="tag" style={{ background: 'var(--accent-glow)', color: 'var(--accent)', fontSize: '0.7rem' }}>
                                   {t.trim()}

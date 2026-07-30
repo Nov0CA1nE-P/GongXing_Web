@@ -159,6 +159,67 @@ def serialize_courseware_row(row) -> dict:
     return result
 
 
+def has_pdf_content_signature(path: Path) -> bool:
+    """轻量检查前1024字节中的PDF签名，不等同于完整PDF语法验证。"""
+    with path.open("rb") as stream:
+        return b"%PDF-" in stream.read(1024)
+
+
+def public_pdf_filename(
+    row,
+    *,
+    uploads_dir: str | Path = UPLOADS_DIR,
+) -> str | None:
+    """返回可公开下载的 PDF 文件名；任何路径或文件异常都视为不可公开。"""
+    stored_value = dict(row).get("pdf_path", "")
+    if not stored_value:
+        return None
+    try:
+        filename = safe_stored_basename(stored_value)
+        if Path(filename).suffix.lower() != ".pdf":
+            return None
+        file_path = resolve_upload_path(
+            stored_value,
+            uploads_dir=uploads_dir,
+            require_exists=True,
+        )
+    except (UnsafeStoredPath, FileNotFoundError):
+        return None
+    if file_path.is_symlink() or not file_path.is_file():
+        return None
+    try:
+        if not has_pdf_content_signature(file_path):
+            return None
+    except OSError:
+        return None
+    # 内容检查和返回之间再次确认，文件消失或被替换时安全失败。
+    if (
+        not file_path.exists()
+        or file_path.is_symlink()
+        or not file_path.is_file()
+    ):
+        return None
+    return filename
+
+
+def serialize_public_courseware_row(
+    row,
+    *,
+    uploads_dir: str | Path = UPLOADS_DIR,
+) -> dict | None:
+    filename = public_pdf_filename(row, uploads_dir=uploads_dir)
+    if filename is None:
+        return None
+    source = dict(row)
+    return {
+        "id": source["id"],
+        "title": source["title"],
+        "description": source.get("description", ""),
+        "tags": source.get("tags", ""),
+        "pdf_path": filename,
+    }
+
+
 def _read_limited(archive: zipfile.ZipFile, name: str, limit: int) -> bytes:
     with archive.open(name) as stream:
         data = stream.read(limit + 1)
@@ -236,9 +297,8 @@ def _validate_pptx(path: Path) -> None:
 
 def _validate_file_content(path: Path, extension: str) -> None:
     if extension == ".pdf":
-        with path.open("rb") as stream:
-            if b"%PDF-" not in stream.read(1024):
-                raise ValueError("PDF 文件签名无效")
+        if not has_pdf_content_signature(path):
+            raise ValueError("PDF 文件签名无效")
         return
     if extension == ".ppt":
         try:

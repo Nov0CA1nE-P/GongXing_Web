@@ -18,11 +18,15 @@ const features = [
     link: '/qanda', icon: '💡', tag: 'AI 助手',
   },
   {
-    title: '专业探索', desc: '不知道学什么？通过互动地图发现适合你的方向',
+    title: '专业探索', desc: '浏览部分专业示例、可能涉及的课程和职业方向',
     link: '/explore', icon: '🗺️', tag: '新功能',
   },
   {
-    title: '联系我们', desc: '想深入了解北科？直接联系学长学姐',
+    title: 'AI 趣味测试', desc: '通过六个兴趣维度，获得仅供参考的专业探索建议',
+    link: '/aitest', icon: '🧠', tag: '兴趣探索',
+  },
+  {
+    title: '联系我们', desc: '通过仅管理员可见的表单联系实践团',
     link: '/contact', icon: '🤝', tag: '联系方式',
   },
 ]
@@ -65,7 +69,7 @@ export default function Home() {
             fontSize: '0.78rem', fontWeight: 600, letterSpacing: '0.08em',
             color: 'var(--ink-lighter)', textTransform: 'uppercase',
           }}>
-            北京科技大学 · 躬行启杭实践团
+            主办：北京科技大学 · 协办：浙江省杭州学军中学
           </span>
           <span style={{ width: '32px', height: '1px', background: 'var(--gold)' }} />
         </div>
@@ -75,14 +79,14 @@ export default function Home() {
           fontWeight: 800, letterSpacing: '0.03em', lineHeight: 1.25,
           color: 'var(--ink)', marginBottom: '20px',
         }}>
-          从专业认知<br />到梦想启航
+          躬行启杭专业科普体验夏令营
         </h1>
 
         <p style={{
           fontSize: '1rem', color: 'var(--ink-light)', lineHeight: 1.8, marginBottom: '36px',
         }}>
-          对大学专业感到迷茫是每位高中生都会经历的时刻。
-          <br />我们在这里，帮你探索方向、解答疑惑，让前路多一份清晰、少一分彷徨。
+          2026年7月25日至7月30日
+          <br />浙江省杭州学军中学（紫金港校区）
         </p>
 
         <div style={{ display: 'flex', gap: '14px', justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -91,9 +95,6 @@ export default function Home() {
           </Link>
           <Link to="/aitest" className="btn btn-outline" style={{ padding: '12px 30px', fontSize: '0.9rem' }}>
             🧠 AI 性格测试
-          </Link>
-          <Link to="/scores" className="btn btn-outline" style={{ padding: '12px 30px', fontSize: '0.9rem' }}>
-            📊 高考分数线
           </Link>
           <Link to="/explore" className="btn btn-outline" style={{ padding: '12px 30px', fontSize: '0.9rem' }}>
             🗺️ 探索专业地图
@@ -135,7 +136,7 @@ export default function Home() {
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
           <div className="section-title" style={{ justifyContent: 'center' }}>探索平台</div>
           <p style={{ color: 'var(--ink-lighter)', fontSize: '0.88rem' }}>
-            五大板块，涵盖你需要的所有功能
+            六项核心功能，集中提供活动资料与交流入口
           </p>
         </div>
 
@@ -179,14 +180,14 @@ export default function Home() {
               fontWeight: 700, textAlign: 'center', marginBottom: '20px',
               color: 'var(--ink)',
             }}>
-              躬行启杭专业科普体验实践团
+              躬行启杭专业科普体验夏令营
             </h2>
 
             <div style={{ fontSize: '0.92rem', color: 'var(--ink-light)', lineHeight: 1.85 }}>
               <p style={{ marginBottom: '14px' }}>
-                我们是来自<strong style={{ color: 'var(--accent)' }}>北京科技大学</strong>的社会实践团队，
-                由一群热爱专业、乐于分享的学长学姐组成。
-                我们正在<strong style={{ color: 'var(--accent)' }}>学军中学紫金港校区</strong>开展专业科普体验活动。
+                本次夏令营由<strong style={{ color: 'var(--accent)' }}>北京科技大学</strong>主办、
+                <strong style={{ color: 'var(--accent)' }}>浙江省杭州学军中学</strong>协办，
+                于2026年7月25日至7月30日在杭州学军中学紫金港校区开展。
               </p>
               <p style={{ marginBottom: '14px' }}>
                 我们深知，高中阶段对大学专业的认知往往充满了模糊和不确定——

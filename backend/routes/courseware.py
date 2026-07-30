@@ -1,6 +1,7 @@
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import (
@@ -13,7 +14,7 @@ from fastapi import (
     UploadFile,
 )
 
-from auth import AdminSession, require_admin_write
+from auth import AdminSession, require_admin, require_admin_write
 from config import (
     COURSEWARE_MAX_UPLOAD_BYTES,
     COURSEWARE_TEMP_DIR,
@@ -25,6 +26,7 @@ from file_storage import (
     UnsafeStoredPath,
     resolve_upload_path,
     serialize_courseware_row,
+    serialize_public_courseware_row,
     store_validated_upload,
 )
 
@@ -34,18 +36,38 @@ LOGGER = logging.getLogger(__name__)
 
 @router.get("/list")
 def list_courseware(tag: str = ""):
-    """获取所有课件列表，按日期倒序。可选按 tag 筛选。"""
+    """获取可公开PDF列表。可选按 tag 筛选。"""
     conn = get_db()
     try:
         if tag:
             rows = conn.execute(
-                "SELECT * FROM courseware WHERE tags LIKE ? ORDER BY date DESC",
+                "SELECT * FROM courseware WHERE tags LIKE ? "
+                "ORDER BY created_at DESC, id DESC",
                 (f"%{tag}%",),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM courseware ORDER BY date DESC"
+                "SELECT * FROM courseware ORDER BY created_at DESC, id DESC"
             ).fetchall()
+        result = [
+            serialize_public_courseware_row(row, uploads_dir=UPLOADS_DIR)
+            for row in rows
+        ]
+        return [item for item in result if item is not None]
+    finally:
+        conn.close()
+
+
+@router.get("/admin/list")
+def admin_list_courseware(
+    _admin: AdminSession = Depends(require_admin),
+):
+    """管理员查看全部历史课件，包括PPT/PPTX兼容记录。"""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM courseware ORDER BY created_at DESC, id DESC"
+        ).fetchall()
         return [serialize_courseware_row(row) for row in rows]
     finally:
         conn.close()
@@ -53,7 +75,7 @@ def list_courseware(tag: str = ""):
 
 @router.get("/{courseware_id}")
 def get_courseware(courseware_id: int):
-    """获取单个课件详情。"""
+    """获取单个可公开PDF详情。"""
     conn = get_db()
     try:
         row = conn.execute(
@@ -64,14 +86,17 @@ def get_courseware(courseware_id: int):
         conn.close()
     if not row:
         raise HTTPException(status_code=404, detail="课件不存在")
-    return serialize_courseware_row(row)
+    result = serialize_public_courseware_row(row, uploads_dir=UPLOADS_DIR)
+    if result is None:
+        raise HTTPException(status_code=404, detail="课件不存在")
+    return result
 
 
 @router.post("/upload")
 async def upload_courseware(
     request: Request,
     title: str = Form(...),
-    date: str = Form(...),
+    date: str = Form(""),
     description: str = Form(""),
     tags: str = Form(""),
     file: UploadFile = File(...),
@@ -108,12 +133,22 @@ async def upload_courseware(
         pdf_path = final_name if final_name.endswith(".pdf") else ""
         pptx_path = final_name if not pdf_path else ""
 
+        internal_date = date.strip() or datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d"
+        )
         conn = get_db()
         cursor = conn.execute(
             "INSERT INTO courseware "
             "(title, date, description, tags, pdf_path, pptx_path) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (title, date, description, tags, pdf_path, pptx_path),
+            (
+                title,
+                internal_date,
+                description,
+                tags,
+                pdf_path,
+                pptx_path,
+            ),
         )
         conn.commit()
         committed = True

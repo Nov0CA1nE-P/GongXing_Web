@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { Link } from 'react-router-dom'
 import { API_BASE_URL } from '../config/runtime'
 import { getPublicApiError, publicRequest } from '../config/publicApi'
 import { loadJson } from '../config/listApi'
@@ -256,6 +257,10 @@ export default function QandA() {
           <p style={{ color: 'var(--ink-light)', fontSize: '0.86rem', marginBottom: '20px', lineHeight: 1.6 }}>
             不需要准确描述——想到什么就写什么。我们的智能大模型会帮你理清思路。
           </p>
+          <div className="blockquote-decorated" style={{ marginBottom: '16px', fontSize: '0.82rem' }}>
+            问题文字会发送给第三方AI生成回答，内容可能出错；经管理员审核后，昵称、问题和回答会公开展示，
+            仅供参考。请勿填写个人联系方式或敏感信息。详见 <Link to="/privacy">隐私说明</Link>。
+          </div>
           <div className="form-group">
             <input value={author} onChange={e => setAuthor(e.target.value)} placeholder="你的昵称（可选）" />
           </div>
@@ -369,7 +374,7 @@ export default function QandA() {
                       <div key={fu.id} style={{
                         marginBottom: '14px', padding: '16px 20px',
                         background: 'var(--cream-dark)', borderRadius: 'var(--radius-sm)',
-                        borderLeft: '3px solid var(--accent)',
+                        border: '1px solid var(--border-light)',
                       }}>
                         <div style={{ marginBottom: '8px' }}>
                           <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--accent)' }}>
@@ -400,6 +405,9 @@ export default function QandA() {
 
                     {/* 追问输入 */}
                     <div style={{ marginTop: '14px' }}>
+                      <p style={{ fontSize: '0.76rem', color: 'var(--ink-lighter)', marginBottom: '8px' }}>
+                        追问会连同当前问答及最近已发布追问上下文发送给第三方AI，审核通过后公开。
+                      </p>
                       <input
                         value={followUpAuthor[q.id] || ''}
                         onChange={e => setFollowUpAuthor(prev => ({ ...prev, [q.id]: e.target.value }))}
