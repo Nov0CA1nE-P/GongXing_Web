@@ -9,4 +9,9 @@ data/*.db-shm
 data/uploads/
 data/courseware/
 data/tmp/
+deploy/local/
+deploy/artifacts/
+*.htpasswd
+*.restic-password
+*.backup-credentials
 .DS_Store

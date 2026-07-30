@@ -1,5 +1,41 @@
 # 开发记录
 
+## 2026-07-30：DigitalOcean 受限测试部署阶段 A
+
+### 实现内容
+
+- 为 `test.novocaine.me` 增加证书前 bootstrap 和首次启用即带
+  Basic Auth 的 Nginx 模板。
+- 增加单 worker systemd、统一 flock、维护 503、SQLite 一致性快照、
+  有效 PDF manifest、restic 备份和隔离恢复演练脚本。
+- 固定 Node.js 24.18.0、其已验证自带 npm 11.16.0 和 Linux
+  Python 3.12，生成后端哈希锁。
+- 增加只读权限 GitHub Actions 与部署资产契约测试。
+- 记录秘密、境外数据、Spaces 版本控制、账单与销毁边界。
+- 增加阶段 B 前置门禁、主机加固、无公开窗口、发布/回滚、冒烟测试、
+  监控扩容和销毁运行手册；该手册本轮未执行。
+
+### 阶段边界
+
+- 本轮没有创建 DigitalOcean、Spaces、证书或 DNS 记录。
+- 没有读取或输出真实 `.env`。
+- 未在本机安装 Nginx，因此本轮以静态契约测试检查配置；阶段 B 必须在
+  Ubuntu 24.04 安装目标包后执行 `nginx -t`。
+
+### 验证结果
+
+- 使用官方 Node.js 24.18.0 Windows x64 包自带的 npm 11.16.0 执行
+  `npm ci`、lint 和 build，全部通过。
+- Vite 构建仍有主包超过 500 kB 的既有提示；`npm audit` 仍报告
+  2 个 high，本轮没有擅自执行破坏性依赖升级。
+- 在隔离的 Linux x86_64 Python 3.12.13 环境按哈希锁安装成功，
+  92 项后端测试全部通过。
+- 部署资产 11 项契约测试、CI YAML 解析和所有 shell 语法检查通过。
+- systemd 静态解析仅报告目标服务器路径尚不存在及 Windows 挂载权限
+  元数据提示，未发现 unit 指令语法错误；完整验证留待阶段 B 目标机。
+- Linux Node 包下载在本地线路超时，因此精确 Linux Node/npm 组合仍由
+  推送后的 GitHub Linux CI 再次验证；本轮没有推送。
+
 ## 2026-07-27：项目根目录标准化
 
 ### 实现内容
