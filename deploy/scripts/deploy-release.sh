@@ -12,6 +12,7 @@ shift
 artifact_dir=""
 release_id=""
 confirmed_backup=""
+initial_deploy=0
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --artifact)
@@ -26,6 +27,10 @@ while [[ "$#" -gt 0 ]]; do
             confirmed_backup="${2:-}"
             shift 2
             ;;
+        --initial-deploy)
+            initial_deploy=1
+            shift
+            ;;
         *)
             echo "error: unknown argument: $1" >&2
             exit 2
@@ -37,13 +42,19 @@ if [[ ! "${release_id}" =~ ^[0-9a-f]{7,40}$ ]]; then
     echo "error: --release must be a Git commit ID" >&2
     exit 2
 fi
-if [[ -z "${confirmed_backup}" ]]; then
-    echo "error: --confirmed-backup is required" >&2
+if [[ "${initial_deploy}" -eq 1 && -n "${confirmed_backup}" ]]; then
+    echo "error: --initial-deploy and --confirmed-backup are mutually exclusive" >&2
     exit 2
 fi
-if [[ ! "${confirmed_backup}" =~ ^[0-9a-f]{8,64}$ ]]; then
-    echo "error: --confirmed-backup must be a verified restic snapshot ID" >&2
-    exit 2
+if [[ "${initial_deploy}" -eq 0 ]]; then
+    if [[ -z "${confirmed_backup}" ]]; then
+        echo "error: subsequent deployments require --confirmed-backup" >&2
+        exit 2
+    fi
+    if [[ ! "${confirmed_backup}" =~ ^[0-9a-f]{8,64}$ ]]; then
+        echo "error: --confirmed-backup must be a verified restic snapshot ID" >&2
+        exit 2
+    fi
 fi
 artifact_dir="$(realpath -- "${artifact_dir}")"
 if [[ ! -d "${artifact_dir}/backend" || ! -d "${artifact_dir}/frontend/dist" ]]; then
@@ -62,15 +73,64 @@ fi
 acquire_ops_lock
 assert_no_recovery_holds
 
-releases_root="/opt/gongxing/releases"
+if [[ "${GONGXING_DEPLOY_TEST_MODE:-0}" == "1" ]]; then
+    releases_root="${GONGXING_TEST_ROOT}/opt/gongxing/releases"
+    current_link="${GONGXING_TEST_ROOT}/opt/gongxing/current"
+else
+    releases_root="/opt/gongxing/releases"
+    current_link="/opt/gongxing/current"
+fi
 release_dir="${releases_root}/${release_id}"
 temporary_release="${releases_root}/.${release_id}.new"
-current_link="/opt/gongxing/current"
 previous_target=""
 was_active=0
 switched=0
 
-install -d -m 0750 -o root -g gongxing "${releases_root}"
+if [[ "${initial_deploy}" -eq 1 ]]; then
+    if [[ -e "${current_link}" || -L "${current_link}" ]]; then
+        echo "error: initial deployment requires no current release" >&2
+        exit 1
+    fi
+    if service_is_active; then
+        echo "error: initial deployment requires a stopped service" >&2
+        exit 1
+    fi
+    if [[ -d "${releases_root}" ]] && \
+       [[ -n "$(find "${releases_root}" -mindepth 1 -print -quit)" ]]; then
+        echo "error: initial deployment requires an empty releases directory" >&2
+        exit 1
+    fi
+    if [[ -L "${DATA_DIR}" ]]; then
+        echo "error: initial deployment refuses a symlinked data directory" >&2
+        exit 1
+    fi
+    if [[ -e "${DATA_DIR}/site.db" || -L "${DATA_DIR}/site.db" ]]; then
+        echo "error: initial deployment requires no database" >&2
+        exit 1
+    fi
+    if [[ -L "${DATA_DIR}/uploads" ]] || {
+        [[ -d "${DATA_DIR}/uploads" ]] &&
+        [[ -n "$(find "${DATA_DIR}/uploads" -mindepth 1 -print -quit)" ]]
+    }; then
+        echo "error: initial deployment requires an empty uploads directory" >&2
+        exit 1
+    fi
+    if [[ -d "${DATA_DIR}" ]] && \
+       [[ -n "$(
+           find "${DATA_DIR}" -mindepth 1 \
+               \( -type f -o -type l -o -type p -o -type s \) \
+               -print -quit
+       )" ]]; then
+        echo "error: initial deployment refuses existing persistent data" >&2
+        exit 1
+    fi
+fi
+
+if [[ "${GONGXING_DEPLOY_TEST_MODE:-0}" == "1" ]]; then
+    install -d -m 0750 "${releases_root}"
+else
+    install -d -m 0750 -o root -g gongxing "${releases_root}"
+fi
 if [[ -e "${release_dir}" || -L "${release_dir}" ]]; then
     echo "error: release already exists" >&2
     exit 1
@@ -88,7 +148,14 @@ cleanup() {
             rm -f -- "${current_link}"
         fi
     fi
-    if [[ "${was_active}" -eq 1 ]]; then
+    if [[ "${exit_code}" -eq 0 && "${initial_deploy}" -eq 1 ]]; then
+        if ! service_is_active; then
+            exit_code=1
+            service_restored=0
+            logger -p user.err -t gongxing-deploy \
+                "initial service did not remain active; maintenance mode remains enabled"
+        fi
+    elif [[ "${was_active}" -eq 1 ]]; then
         if ! systemctl start "${GONGXING_SERVICE}"; then
             exit_code=1
             service_restored=0
@@ -131,7 +198,9 @@ python3.12 -m venv "${temporary_release}/.venv"
     --require-hashes \
     --requirement "${temporary_release}/backend/requirements.lock"
 
-chown -R root:gongxing "${temporary_release}"
+if [[ "${GONGXING_DEPLOY_TEST_MODE:-0}" != "1" ]]; then
+    chown -R root:gongxing "${temporary_release}"
+fi
 find "${temporary_release}" -type d -exec chmod 0750 {} +
 find "${temporary_release}" -type f -exec chmod 0640 {} +
 find "${temporary_release}/.venv/bin" -type f -exec chmod 0750 {} +
@@ -147,7 +216,14 @@ switched=1
 systemctl start "${GONGXING_SERVICE}"
 curl --silent --show-error --fail --max-time 10 \
     http://127.0.0.1:8000/api/health >/dev/null
-systemctl stop "${GONGXING_SERVICE}"
+if [[ "${initial_deploy}" -eq 0 ]]; then
+    systemctl stop "${GONGXING_SERVICE}"
+fi
 
-logger -t gongxing-deploy \
-    "release ${release_id} installed after confirmed backup ${confirmed_backup}"
+if [[ "${initial_deploy}" -eq 1 ]]; then
+    logger -t gongxing-deploy \
+        "initial release ${release_id} installed without pre-existing data"
+else
+    logger -t gongxing-deploy \
+        "release ${release_id} installed after confirmed backup ${confirmed_backup}"
+fi

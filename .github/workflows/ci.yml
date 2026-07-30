@@ -117,5 +117,5 @@ jobs:
             echo "tracked runtime secret or persistent data file detected" >&2
             exit 1
           fi
-          bash -n deploy/scripts/*.sh
+          bash -n deploy/scripts/*.sh deploy/tests/*.sh
           python -m unittest discover -s deploy/tests -p 'test_*.py'

@@ -3,12 +3,31 @@
 set -Eeuo pipefail
 
 readonly GONGXING_SERVICE="gongxing.service"
-readonly OPS_LOCK_FILE="/run/lock/gongxing-ops.lock"
-readonly MAINTENANCE_DIR="/run/gongxing"
+
+if [[ "${GONGXING_DEPLOY_TEST_MODE:-0}" == "1" ]]; then
+    readonly GONGXING_TEST_ROOT="${GONGXING_DEPLOY_TEST_ROOT:?test root is required}"
+    case "${GONGXING_TEST_ROOT}" in
+        /tmp/*) ;;
+        *)
+            echo "error: deployment test root must be below /tmp" >&2
+            exit 2
+            ;;
+    esac
+    readonly OPS_LOCK_FILE="${GONGXING_TEST_ROOT}/run/lock/gongxing-ops.lock"
+    readonly MAINTENANCE_DIR="${GONGXING_TEST_ROOT}/run/gongxing"
+    readonly DATA_DIR="${GONGXING_TEST_ROOT}/var/lib/gongxing/data"
+else
+    readonly OPS_LOCK_FILE="/run/lock/gongxing-ops.lock"
+    readonly MAINTENANCE_DIR="/run/gongxing"
+    readonly DATA_DIR="/var/lib/gongxing/data"
+fi
+
 readonly MAINTENANCE_FILE="${MAINTENANCE_DIR}/maintenance"
-readonly DATA_DIR="/var/lib/gongxing/data"
 
 require_root() {
+    if [[ "${GONGXING_DEPLOY_TEST_MODE:-0}" == "1" ]]; then
+        return
+    fi
     if [[ "${EUID}" -ne 0 ]]; then
         echo "error: this operation must run as root" >&2
         exit 1

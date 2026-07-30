@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -12,6 +14,21 @@ ROOT = Path(__file__).resolve().parents[2]
 class DeploymentAssetTests(unittest.TestCase):
     def read(self, relative_path: str) -> str:
         return (ROOT / relative_path).read_text(encoding="utf-8")
+
+    def nginx_server_blocks(self, config: str) -> list[str]:
+        blocks: list[str] = []
+        for match in re.finditer(r"\bserver\s*\{", config):
+            depth = 1
+            cursor = match.end()
+            while cursor < len(config) and depth:
+                if config[cursor] == "{":
+                    depth += 1
+                elif config[cursor] == "}":
+                    depth -= 1
+                cursor += 1
+            self.assertEqual(depth, 0, "unclosed Nginx server block")
+            blocks.append(config[match.start():cursor])
+        return blocks
 
     def test_runtime_versions_are_explicit_and_verified(self):
         versions = self.read("deploy/runtime-versions.conf")
@@ -28,6 +45,10 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertNotIn("proxy_pass", config)
         self.assertNotIn("frontend/dist", config)
         self.assertRegex(config, r"return (?:404|503)")
+        blocks = self.nginx_server_blocks(config)
+        self.assertEqual(len(blocks), 2)
+        for block in blocks:
+            self.assertRegex(block, r"(?m)^\s*access_log\s+off;")
 
     def test_final_nginx_security_contract(self):
         config = self.read("deploy/nginx/gongxing-test.conf")
@@ -53,8 +74,13 @@ class DeploymentAssetTests(unittest.TestCase):
             "Referrer-Policy",
             "X-Frame-Options",
             "Permissions-Policy",
+            "Strict-Transport-Security",
         ):
             self.assertIn(value, headers)
+        self.assertIn('"max-age=86400"', headers)
+        lowered_headers = headers.lower()
+        self.assertNotIn("includesubdomains", lowered_headers)
+        self.assertNotIn("preload", lowered_headers)
         log_format = re.search(
             r"log_format gongxing_safe(?P<body>.*?);",
             config,
@@ -64,6 +90,22 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIsNone(
             re.search(r"\$(request|request_uri)\b", log_format.group("body"))
         )
+        blocks = self.nginx_server_blocks(config)
+        self.assertEqual(len(blocks), 4)
+        application_blocks = [
+            block
+            for block in blocks
+            if "listen 443 ssl http2;" in block
+            and "server_name test.novocaine.me;" in block
+        ]
+        self.assertEqual(len(application_blocks), 1)
+        self.assertRegex(
+            application_blocks[0],
+            r"(?m)^\s*access_log\s+\S+\s+gongxing_safe;",
+        )
+        for block in blocks:
+            if block not in application_blocks:
+                self.assertRegex(block, r"(?m)^\s*access_log\s+off;")
 
     def test_proxy_headers_are_overwritten(self):
         config = self.read("deploy/nginx/snippets/gongxing-proxy.conf")
@@ -111,13 +153,29 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("--workers 1", unit)
         self.assertIn("--forwarded-allow-ips 127.0.0.1", unit)
 
-    def test_deploy_validates_new_release_and_can_rollback_first_release(self):
-        script = self.read("deploy/scripts/deploy-release.sh")
-        self.assertIn("verified restic snapshot ID", script)
-        self.assertIn('systemctl start "${GONGXING_SERVICE}"', script)
-        self.assertIn("http://127.0.0.1:8000/api/health", script)
-        self.assertIn('rm -f -- "${current_link}"', script)
-        self.assertIn("maintenance mode remains enabled", script)
+    def test_deploy_release_modes_and_state_transitions(self):
+        harness = ROOT / "deploy/tests/deploy_release_harness.sh"
+        if os.name == "nt":
+            drive = harness.drive.rstrip(":").lower()
+            relative = harness.relative_to(harness.anchor).as_posix()
+            converted = f"/mnt/{drive}/{relative}"
+            command = ["wsl", "bash", converted]
+        else:
+            command = ["bash", str(harness)]
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=60,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+        )
+        self.assertIn("deploy release behavior tests: ok", result.stdout)
 
     def test_spaces_lifecycle_is_valid_and_bounded(self):
         lifecycle = json.loads(self.read("deploy/spaces/lifecycle.json"))

@@ -75,10 +75,14 @@ restic 密码至少保留一份与 Droplet、Spaces 账户分离的离线恢复�
 
 - 全站 Basic Auth、noindex、robots 拒绝和未知 Host/SNI 拒绝。
 - `client_max_body_size 52m`，应用仍执行精确 50 MiB 文件限制。
-- 日志只记录 `$uri`，不记录查询字符串、认证头、Cookie 或 Basic 用户。
+- Bootstrap 两个入口、最终 HTTP 未知 Host/跳转和 HTTPS 未知 SNI
+  都显式 `access_log off`；HTTPS 应用站点只使用包含 `$uri` 的安全格式，
+  不记录查询字符串、认证头、Cookie 或 Basic 用户。
 - JS、CSS、JSON、SVG 开启 gzip 并返回 `Vary: Accept-Encoding`。
 - 首期启用 nosniff、严格来源 Referrer-Policy、SAMEORIGIN frame 保护和
-  谨慎 Permissions-Policy。
+  谨慎 Permissions-Policy，并仅在 HTTPS 响应加入
+  `Strict-Transport-Security: max-age=86400`。测试阶段不使用
+  `includeSubDomains` 或 `preload`。
 - CSP 不随首次部署强制启用；必须先用真实浏览器验证内联样式、Markdown、
   PDF 预览和全部核心页面，可以先使用 Report-Only。
 - `/api` 和 `/data` 明确代理，永远不回退至 React SPA。
@@ -102,6 +106,19 @@ systemd journal                     FastAPI、备份、恢复和健康观察日�
 FastAPI 由 `gongxing.service` 以无登录用户运行，绑定
 `127.0.0.1:8000` 且固定一个 worker。只有进程退出由 systemd 自动恢复；
 HTTP 健康观察只记录和告警，绝不重启服务。
+
+部署脚本有两个互斥模式：
+
+- `--initial-deploy` 只允许在没有 current release、服务停止、releases
+  目录为空、数据库不存在、上传目录为空且没有其他持久数据时使用，不要求
+  不可能存在的历史快照。成功后服务保持运行并解除维护；失败后删除错误
+  current、停止服务并保留维护状态。
+- 其他部署一律属于后续升级，必须提供经过验证的
+  `--confirmed-backup <snapshot-id>`。它与首次参数同时出现会拒绝，
+  并继续保持原服务状态与失败回滚。
+
+首次部署与冒烟通过后必须立即生成并验证第一份备份；从下一次部署开始，
+不得再使用首次模式。
 
 ## 7. 运维锁和维护状态
 
@@ -169,11 +186,13 @@ SHA，checkout 不保留写凭据。CI 不部署、不持有服务器秘密，�
 - [x] 前端 build、lint 通过。
 - [x] Linux Python 3.12 哈希锁可以完整安装。
 - [x] Python 3.12 后端测试通过；3.13 只作为额外结果。
-- [x] 部署资产静态测试和所有 shell 语法检查通过。
+- [x] 部署资产静态/行为测试和所有 shell 语法检查通过。
 - [x] Nginx bootstrap 没有应用代理或静态站点入口。
 - [x] 最终 443 配置首次启用即包含 Basic Auth。
 - [x] 备份、部署、恢复共用 flock 并阻断 recovery hold。
 - [x] HTTP 健康检查没有自动重启命令。
+- [x] 首次和后续部署门禁、成功/失败状态由隔离行为测试覆盖。
+- [x] 每个 Nginx server 块都显式关闭访问日志或使用 `$uri` 安全日志。
 - [x] Git 中不存在真实秘密、DB、PDF 或 htpasswd。
 - [x] 阶段 B 资源仍未创建，DNS 仍未修改。
 

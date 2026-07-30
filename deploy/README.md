@@ -16,3 +16,9 @@ deploy/
 
 任何带 `--apply`、`--confirm-server` 或云平台写权限的操作都属于阶段 B。
 阶段 A 不运行这些操作。
+
+`deploy-release.sh` 的部署门禁互斥：
+
+- 只有绝对空状态的第一次部署使用 `--initial-deploy`；
+- 后续部署必须使用 `--confirmed-backup <已验证 snapshot ID>`；
+- 两个参数不能同时出现，首次模式也不能用于已有 release 或持久数据。

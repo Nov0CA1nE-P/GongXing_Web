@@ -359,6 +359,10 @@
 - [ ] 逐用户 Basic Auth 可以单独撤销，认证头不会传给 FastAPI
 - [ ] 未知 Host、直接 IP、8000 和 5173 均无法访问应用
 - [ ] Nginx 使用 `$uri` 日志且不记录查询字符串和认证信息
+- [ ] Bootstrap 未知 Host 和测试 Host 均显式关闭访问日志
+- [ ] 最终 HTTP 未知 Host、HTTP 跳转和 HTTPS 未知 SNI 均关闭访问日志
+- [ ] HTTPS 应用入口使用 `$uri` 安全日志，不使用默认日志
+- [ ] HTTPS 返回短期 HSTS `max-age=86400`，不含 includeSubDomains/preload
 - [ ] `/api` 和 `/data` 的不存在路径不会返回前端 `index.html`
 - [ ] 客户端伪造 Forwarded/X-Forwarded-* 后应用仍识别真实来源
 - [ ] 维护标记存在时返回 503 和 Retry-After
@@ -378,6 +382,13 @@
 
 ### 15.1 部署与备份协调
 
+- [ ] `--initial-deploy` 只在无 current、服务停止、无 release、无数据库、
+      空上传目录且无其他持久数据时成功
+- [ ] 首次部署成功后服务保持运行、维护解除；健康失败时 current 被移除、
+      服务停止且维护保留
+- [ ] 重复首次部署和首次/备份参数同时使用均明确拒绝
+- [ ] 后续部署缺少已验证 snapshot ID 时在修改服务前拒绝
+- [ ] 后续正常部署保持原服务状态，失败时回滚旧 current
 - [ ] 部署、备份和恢复使用同一个非阻塞 flock
 - [ ] 并发启动第二个高风险操作时明确失败
 - [ ] `.recover-*.hold` 会阻断部署和备份且不会被自动删除

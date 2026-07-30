@@ -139,12 +139,36 @@ journal。日志保留期在阶段 B 按无真实个人数据的最小化原则�
    `deploy/scripts/build-release.sh <git-sha> <new-output-dir>`。
 2. 核对 `RELEASE_BUILD_MANIFEST.txt` 的 Git SHA 和锁文件哈希；发布包
    不得含 `.env`、数据库、PDF、htpasswd 或备份凭据。
-3. 首次部署前先创建空数据库目录和上传目录；后续部署必须先确认一份
-   已成功上传并可列出的 restic snapshot。
-4. 以 root 调用 `deploy-release.sh --confirm-server`，同时传入发布物、
-   Git SHA 和已确认 snapshot ID。脚本获取统一 flock、进入维护状态、
-   安装不可变 release、切换 symlink、健康检查，失败时自动回退链接。
-5. 启用并启动 `gongxing.service`、备份 timer 和健康观察 timer；Nginx
+3. 首次部署前只创建空的数据目录和空的 `uploads/`。确认不存在
+   `/opt/gongxing/current`、任何旧 release、`site.db`、上传文件或其他
+   持久数据，并确认 `gongxing.service` 没有运行。
+4. 首次且仅首次使用：
+
+   ```bash
+   sudo /usr/local/lib/gongxing/deploy-release.sh --confirm-server \
+     --initial-deploy \
+     --artifact <发布物绝对路径> \
+     --release <Git-SHA>
+   ```
+
+   首次模式不接受 `--confirmed-backup`。健康检查通过后服务保持运行并
+   解除维护状态；失败时删除错误的 `current` 链接、停止服务并保留维护
+   状态。任何已有 release、数据库、上传文件或其他持久数据都会使首次
+   模式安全失败，不能把它作为跳过备份的开关。
+5. 首次部署和冒烟通过后立即创建、列出并恢复检查第一份 restic snapshot。
+   此后的每次升级只允许使用：
+
+   ```bash
+   sudo /usr/local/lib/gongxing/deploy-release.sh --confirm-server \
+     --confirmed-backup <已验证的-snapshot-ID> \
+     --artifact <发布物绝对路径> \
+     --release <Git-SHA>
+   ```
+
+   后续模式没有有效 snapshot ID 会在修改服务前失败；与
+   `--initial-deploy` 同时传入也会拒绝。脚本保持升级前服务状态，失败时
+   回退旧链接并保留维护状态等待人工确认。
+6. 启用 `gongxing.service`、备份 timer 和健康观察 timer；Nginx
    由系统服务管理。
 
 重启验收：
@@ -163,7 +187,9 @@ sudo reboot
 全程只使用临时内容和专门制作的无个人数据测试 PDF：
 
 1. 未认证访问首页、`/api/health`、`/data/...` 均为 401；响应包含
-   `X-Robots-Tag: noindex, nofollow` 和预期安全头。
+   `X-Robots-Tag: noindex, nofollow`、`Strict-Transport-Security:
+   max-age=86400` 和预期安全头；HSTS 不得包含 `includeSubDomains`
+   或 `preload`。
 2. 验证未知 Host、直接 IP、8000、5173 无法取得应用内容。
 3. Basic Auth 后检查首页、路由刷新、404、API 健康和静态资源压缩；
    `/api`、`/data` 的不存在路径不得返回 `index.html`。
@@ -175,7 +201,9 @@ sudo reboot
    返回 413，Nginx 52m 只作为 multipart 外层上限。
 7. 从两个实际公网出口分别测试限流；带伪造 `Forwarded`、
    `X-Forwarded-For` 请求不能控制应用看到的来源。对照 Nginx 安全日志
-   中的连接 IP，日志不得出现查询字符串、Cookie 或认证信息。
+   中的连接 IP，日志不得出现查询字符串、Cookie 或认证信息。Bootstrap
+   未知 Host/测试 Host、最终 HTTP 未知 Host/跳转和 HTTPS 未知 SNI
+   必须关闭访问日志；只有 HTTPS 应用站点使用 `$uri` 安全日志。
 8. 创建临时留言、问答和联系记录，验证后删除；不输入真实个人信息。
 9. 触发一次计划备份，确认维护期为 503 且有 `Retry-After`，健康观察
    跳过，不重启后端。
