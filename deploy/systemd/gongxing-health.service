@@ -1,0 +1,9 @@
+[Unit]
+Description=Record Gongxing local HTTP health
+After=gongxing.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/lib/gongxing/health-check.sh --confirm-server

@@ -1,0 +1,13 @@
+[Unit]
+Description=Create a consistent encrypted Gongxing backup
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/gongxing/backup.env
+ExecStart=/usr/local/lib/gongxing/backup.sh --confirm-server
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

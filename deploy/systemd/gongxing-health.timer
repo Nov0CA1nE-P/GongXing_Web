@@ -1,0 +1,11 @@
+[Unit]
+Description=Gongxing HTTP health observation timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=gongxing-health.service
+
+[Install]
+WantedBy=timers.target

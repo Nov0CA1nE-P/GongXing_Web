@@ -115,10 +115,24 @@ GET /data/uploads/{filename}
 应用层文件限制不能替代部署入口的请求体限制。默认 50 MB 配置在正式部署时还应设置 Nginx：
 
 ```nginx
-client_max_body_size 51m;
+client_max_body_size 52m;
 ```
 
-如果调整应用上限，应同步调整 Nginx或云平台的等效限制，并为 multipart 请求留出合理开销。
+52m 只为 multipart 边界和协议开销预留空间，应用仍执行精确的
+50 MiB 文件限制。如果调整应用上限，应同步调整 Nginx 或云平台的
+等效限制，并保留合理的 multipart 开销。
+
+## DigitalOcean 受限测试部署
+
+`test.novocaine.me` 的部署准备分为两个阶段：
+
+- 阶段 A 只修改仓库中的模板、脚本、CI、文档和测试，不创建云资源或
+  DNS 记录。
+- 阶段 B 只有在阶段 A 合并、资源与费用再次列明，并获得负责人明确
+  授权后才能开始。
+
+当前部署设计和操作边界见 `docs/deployment-stage-a.md`。仓库中的部署
+配置不包含真实环境变量、Basic Auth 文件、云平台凭据或备份密码。
 
 ### 历史课件路径
 

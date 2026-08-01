@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Gongxing backup timer
+
+[Timer]
+OnCalendar=*-*-* 19:20:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=gongxing-backup.service
+
+[Install]
+WantedBy=timers.target
