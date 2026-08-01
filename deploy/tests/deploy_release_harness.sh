@@ -40,6 +40,7 @@ new_case() {
     printf 'stopped\n' >"${root}/service-state"
     printf '0\n' >"${root}/start-count"
     : >"${root}/start-targets"
+    printf '0\n' >"${root}/maintenance-delete-attempts"
 
     cat >"${fake_bin}/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -84,6 +85,21 @@ EOF
 exit 0
 EOF
 
+    cat >"${fake_bin}/rm" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+for argument in "$@"; do
+    if [[ "${argument}" == "${TEST_MAINTENANCE_FILE}" ]]; then
+        attempts="$(( $(cat "${TEST_MAINTENANCE_DELETE_ATTEMPTS}") + 1 ))"
+        printf '%s\n' "${attempts}" >"${TEST_MAINTENANCE_DELETE_ATTEMPTS}"
+        if [[ "${TEST_MAINTENANCE_DELETE_FAIL:-0}" == "1" ]]; then
+            exit 1
+        fi
+    fi
+done
+exec /usr/bin/rm "$@"
+EOF
+
     cat >"${fake_bin}/python3.12" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -100,7 +116,7 @@ INNER
 chmod 0750 "${target}/bin/python"
 EOF
     chmod 0750 "${fake_bin}/systemctl" "${fake_bin}/curl" \
-        "${fake_bin}/logger" "${fake_bin}/python3.12"
+        "${fake_bin}/logger" "${fake_bin}/rm" "${fake_bin}/python3.12"
     printf '%s\n' "${root}"
 }
 
@@ -127,6 +143,9 @@ run_deploy() {
         TEST_HEALTH_FAIL="${TEST_HEALTH_FAIL:-0}" \
         TEST_EXIT_AFTER_HEALTH="${TEST_EXIT_AFTER_HEALTH:-0}" \
         TEST_START_FAIL_ON="${TEST_START_FAIL_ON:-}" \
+        TEST_MAINTENANCE_DELETE_FAIL="${TEST_MAINTENANCE_DELETE_FAIL:-0}" \
+        TEST_MAINTENANCE_FILE="${root}/run/gongxing/maintenance" \
+        TEST_MAINTENANCE_DELETE_ATTEMPTS="${root}/maintenance-delete-attempts" \
         PATH="${root}/fake-bin:${PATH}" \
         bash "${deploy_script}" --confirm-server "$@"
 }
@@ -149,6 +168,8 @@ test_initial_success() {
     assert_eq "running" "$(cat "${root}/service-state")" \
         "initial deployment service state"
     assert_absent "${root}/run/gongxing/maintenance"
+    assert_eq "1" "$(cat "${root}/maintenance-delete-attempts")" \
+        "initial success did not clear maintenance exactly once"
 }
 
 test_initial_failure() {
@@ -185,6 +206,26 @@ test_initial_final_liveness_failure() {
     assert_eq "stopped" "$(cat "${root}/service-state")" \
         "final liveness failure did not stop the initial service"
     assert_exists "${root}/run/gongxing/maintenance"
+}
+
+test_initial_maintenance_clear_failure() {
+    local root artifact release current
+    root="$(new_case initial-maintenance-clear-failure)"
+    artifact="$(make_artifact "${root}" release)"
+    release="1357913579135791357913579135791357913579"
+    current="${root}/opt/gongxing/current"
+
+    if TEST_MAINTENANCE_DELETE_FAIL=1 run_deploy "${root}" \
+        --initial-deploy --artifact "${artifact}" --release "${release}"; then
+        fail "initial deployment ignored a maintenance clear failure"
+    fi
+
+    assert_absent "${current}"
+    assert_eq "stopped" "$(cat "${root}/service-state")" \
+        "maintenance clear failure did not stop the initial service"
+    assert_exists "${root}/run/gongxing/maintenance"
+    assert_eq "1" "$(cat "${root}/maintenance-delete-attempts")" \
+        "initial failure retried maintenance clear after rollback"
 }
 
 test_repeated_initial_deploy() {
@@ -311,6 +352,8 @@ test_subsequent_success() {
     assert_eq "running" "$(cat "${root}/service-state")" \
         "subsequent deployment did not restore service state"
     assert_absent "${root}/run/gongxing/maintenance"
+    assert_eq "1" "$(cat "${root}/maintenance-delete-attempts")" \
+        "subsequent success did not clear maintenance exactly once"
 }
 
 test_subsequent_stopped_state() {
@@ -393,9 +436,37 @@ test_subsequent_final_restore_failure_rolls_back() {
         "third start did not target the rolled-back release"
 }
 
+test_subsequent_maintenance_clear_failure_rolls_back() {
+    local root artifact old_release new_release current
+    old_release="2468024680246802468024680246802468024680"
+    new_release="abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+    root="$(prepare_subsequent_case subsequent-maintenance-clear-failure "${old_release}")"
+    artifact="$(make_artifact "${root}" release)"
+    current="${root}/opt/gongxing/current"
+
+    if TEST_MAINTENANCE_DELETE_FAIL=1 run_deploy "${root}" \
+        --confirmed-backup abcdef1234567890 \
+        --artifact "${artifact}" --release "${new_release}"; then
+        fail "subsequent deployment ignored a maintenance clear failure"
+    fi
+
+    assert_eq \
+        "${root}/opt/gongxing/releases/${old_release}" \
+        "$(readlink -f -- "${current}")" \
+        "maintenance clear failure did not roll back current"
+    assert_eq "running" "$(cat "${root}/service-state")" \
+        "old release was not restarted after maintenance clear failure"
+    assert_exists "${root}/run/gongxing/maintenance"
+    assert_eq "3" "$(cat "${root}/start-count")" \
+        "maintenance clear rollback did not restart the old release"
+    assert_eq "1" "$(cat "${root}/maintenance-delete-attempts")" \
+        "subsequent failure retried maintenance clear after rollback"
+}
+
 test_initial_success
 test_initial_failure
 test_initial_final_liveness_failure
+test_initial_maintenance_clear_failure
 test_repeated_initial_deploy
 test_initial_persistent_data_guards
 test_subsequent_requires_backup
@@ -403,4 +474,5 @@ test_subsequent_success
 test_subsequent_stopped_state
 test_subsequent_failure_rolls_back
 test_subsequent_final_restore_failure_rolls_back
+test_subsequent_maintenance_clear_failure_rolls_back
 printf 'deploy release behavior tests: ok\n'

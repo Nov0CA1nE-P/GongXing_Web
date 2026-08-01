@@ -141,6 +141,7 @@ cleanup() {
     local final_exit="${original_exit}"
     local rollback_link_restored=1
     local rollback_service_stopped=1
+    local maintenance_cleared=1
 
     trap - EXIT INT TERM HUP
     set +e
@@ -171,7 +172,28 @@ cleanup() {
         fi
     fi
 
-    # 第二阶段：最终失败时统一停止新服务并回滚 current。
+    # 第二阶段：服务状态成功后，解除维护并确认标记确实不存在。
+    if [[ "${final_exit}" -eq 0 ]]; then
+        if ! disable_maintenance; then
+            maintenance_cleared=0
+        fi
+        if [[ -e "${MAINTENANCE_FILE}" || -L "${MAINTENANCE_FILE}" ]]; then
+            maintenance_cleared=0
+        fi
+        if [[ "${maintenance_cleared}" -ne 1 ]]; then
+            final_exit=1
+            logger -p user.err -t gongxing-deploy \
+                "maintenance mode could not be cleared after deployment"
+            if [[ ! -e "${MAINTENANCE_FILE}" && ! -L "${MAINTENANCE_FILE}" ]]; then
+                if ! enable_maintenance; then
+                    logger -p user.err -t gongxing-deploy \
+                        "maintenance mode could not be restored after clear failure"
+                fi
+            fi
+        fi
+    fi
+
+    # 第三阶段：最终失败时统一停止新服务并回滚 current。
     if [[ "${final_exit}" -ne 0 && "${switched}" -eq 1 ]]; then
         systemctl stop "${GONGXING_SERVICE}" || true
         if service_is_active; then
@@ -203,7 +225,7 @@ cleanup() {
         fi
     fi
 
-    # 第三阶段：失败后恢复部署前服务状态；成功时才解除维护。
+    # 第四阶段：失败后恢复部署前服务状态；成功时只记录完成。
     if [[ "${final_exit}" -ne 0 ]]; then
         if [[ "${initial_deploy}" -eq 1 ]]; then
             systemctl stop "${GONGXING_SERVICE}" || true
@@ -235,7 +257,6 @@ cleanup() {
         logger -p user.warning -t gongxing-deploy \
             "deployment failed; maintenance mode remains enabled"
     else
-        disable_maintenance
         if [[ "${initial_deploy}" -eq 1 ]]; then
             logger -t gongxing-deploy \
                 "initial release ${release_id} installed without pre-existing data"
