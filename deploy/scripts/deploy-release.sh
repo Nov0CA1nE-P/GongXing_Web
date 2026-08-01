@@ -137,44 +137,120 @@ if [[ -e "${release_dir}" || -L "${release_dir}" ]]; then
 fi
 
 cleanup() {
-    local exit_code=$?
-    local service_restored=1
-    if [[ "${exit_code}" -ne 0 && "${switched}" -eq 1 ]]; then
-        systemctl stop "${GONGXING_SERVICE}" || true
-        if [[ -n "${previous_target}" ]]; then
-            ln -sfn "${previous_target}" "${current_link}.rollback"
-            mv -Tf "${current_link}.rollback" "${current_link}"
+    local original_exit=$?
+    local final_exit="${original_exit}"
+    local rollback_link_restored=1
+    local rollback_service_stopped=1
+
+    trap - EXIT INT TERM HUP
+    set +e
+
+    # 第一阶段：主流程成功后，再确认新 release 达到最终服务状态。
+    if [[ "${final_exit}" -eq 0 ]]; then
+        if [[ "${initial_deploy}" -eq 1 ]]; then
+            if ! service_is_active; then
+                final_exit=1
+                logger -p user.err -t gongxing-deploy \
+                    "initial release exited before final validation"
+            fi
+        elif [[ "${was_active}" -eq 1 ]]; then
+            if ! systemctl start "${GONGXING_SERVICE}" || ! service_is_active; then
+                final_exit=1
+                logger -p user.err -t gongxing-deploy \
+                    "new release could not restore the pre-deploy running state"
+            fi
         else
+            if service_is_active; then
+                systemctl stop "${GONGXING_SERVICE}" || true
+            fi
+            if service_is_active; then
+                final_exit=1
+                logger -p user.err -t gongxing-deploy \
+                    "new release could not preserve the pre-deploy stopped state"
+            fi
+        fi
+    fi
+
+    # 第二阶段：最终失败时统一停止新服务并回滚 current。
+    if [[ "${final_exit}" -ne 0 && "${switched}" -eq 1 ]]; then
+        systemctl stop "${GONGXING_SERVICE}" || true
+        if service_is_active; then
+            rollback_service_stopped=0
+            logger -p user.err -t gongxing-deploy \
+                "failed to stop the new release before rollback"
+        fi
+        if [[ "${initial_deploy}" -eq 1 ]]; then
             rm -f -- "${current_link}"
+            if [[ -e "${current_link}" || -L "${current_link}" ]]; then
+                rollback_link_restored=0
+                logger -p user.err -t gongxing-deploy \
+                    "failed to remove current after initial deployment failure"
+            fi
+        elif [[ -n "${previous_target}" ]]; then
+            rm -f -- "${current_link}.rollback"
+            if ! ln -s "${previous_target}" "${current_link}.rollback" || \
+               ! mv -Tf "${current_link}.rollback" "${current_link}"; then
+                rollback_link_restored=0
+                rm -f -- "${current_link}.rollback" "${current_link}"
+                logger -p user.err -t gongxing-deploy \
+                    "failed to restore the previous release link"
+            fi
+        else
+            rollback_link_restored=0
+            rm -f -- "${current_link}"
+            logger -p user.err -t gongxing-deploy \
+                "no previous release link was available for rollback"
         fi
     fi
-    if [[ "${exit_code}" -eq 0 && "${initial_deploy}" -eq 1 ]]; then
-        if ! service_is_active; then
-            exit_code=1
-            service_restored=0
-            logger -p user.err -t gongxing-deploy \
-                "initial service did not remain active; maintenance mode remains enabled"
+
+    # 第三阶段：失败后恢复部署前服务状态；成功时才解除维护。
+    if [[ "${final_exit}" -ne 0 ]]; then
+        if [[ "${initial_deploy}" -eq 1 ]]; then
+            systemctl stop "${GONGXING_SERVICE}" || true
+            if service_is_active; then
+                logger -p user.err -t gongxing-deploy \
+                    "initial deployment failed and the service could not be stopped"
+            fi
+        elif [[ "${was_active}" -eq 1 ]]; then
+            if [[ "${rollback_service_stopped}" -ne 1 ]]; then
+                systemctl stop "${GONGXING_SERVICE}" || true
+                if ! service_is_active; then
+                    rollback_service_stopped=1
+                fi
+            fi
+            if [[ "${rollback_link_restored}" -ne 1 ]] || \
+               [[ "${rollback_service_stopped}" -ne 1 ]] || \
+               ! systemctl start "${GONGXING_SERVICE}" || \
+               ! service_is_active; then
+                logger -p user.err -t gongxing-deploy \
+                    "previous release could not be restarted after rollback"
+            fi
+        else
+            systemctl stop "${GONGXING_SERVICE}" || true
+            if service_is_active; then
+                logger -p user.err -t gongxing-deploy \
+                    "pre-deploy stopped state could not be restored after rollback"
+            fi
         fi
-    elif [[ "${was_active}" -eq 1 ]]; then
-        if ! systemctl start "${GONGXING_SERVICE}"; then
-            exit_code=1
-            service_restored=0
-            logger -p user.err -t gongxing-deploy \
-                "service restore failed; maintenance mode remains enabled"
-        fi
-    fi
-    if [[ "${exit_code}" -eq 0 && "${service_restored}" -eq 1 ]]; then
-        disable_maintenance
-    else
         logger -p user.warning -t gongxing-deploy \
-            "deployment did not complete cleanly; maintenance mode remains enabled"
+            "deployment failed; maintenance mode remains enabled"
+    else
+        disable_maintenance
+        if [[ "${initial_deploy}" -eq 1 ]]; then
+            logger -t gongxing-deploy \
+                "initial release ${release_id} installed without pre-existing data"
+        else
+            logger -t gongxing-deploy \
+                "release ${release_id} installed after a confirmed backup"
+        fi
     fi
     if [[ -d "${temporary_release}" ]]; then
         rm -rf -- "${temporary_release}"
     fi
-    exit "${exit_code}"
+    exit "${final_exit}"
 }
-trap cleanup EXIT INT TERM HUP
+trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
 
 if service_is_active; then
     was_active=1
@@ -218,12 +294,4 @@ curl --silent --show-error --fail --max-time 10 \
     http://127.0.0.1:8000/api/health >/dev/null
 if [[ "${initial_deploy}" -eq 0 ]]; then
     systemctl stop "${GONGXING_SERVICE}"
-fi
-
-if [[ "${initial_deploy}" -eq 1 ]]; then
-    logger -t gongxing-deploy \
-        "initial release ${release_id} installed without pre-existing data"
-else
-    logger -t gongxing-deploy \
-        "release ${release_id} installed after confirmed backup ${confirmed_backup}"
 fi

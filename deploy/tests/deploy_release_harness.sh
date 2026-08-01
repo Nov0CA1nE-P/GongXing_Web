@@ -38,6 +38,8 @@ new_case() {
     local fake_bin="${root}/fake-bin"
     mkdir -p "${fake_bin}" "${root}/var/lib/gongxing/data/uploads"
     printf 'stopped\n' >"${root}/service-state"
+    printf '0\n' >"${root}/start-count"
+    : >"${root}/start-targets"
 
     cat >"${fake_bin}/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -47,6 +49,13 @@ case "${1:-}" in
         [[ "$(cat "${TEST_SERVICE_STATE}")" == "running" ]]
         ;;
     start)
+        count="$(( $(cat "${TEST_START_COUNT}") + 1 ))"
+        printf '%s\n' "${count}" >"${TEST_START_COUNT}"
+        target="$(readlink -f -- "${TEST_CURRENT_LINK}" 2>/dev/null || echo missing)"
+        printf '%s:%s\n' "${count}" "${target}" >>"${TEST_START_TARGETS}"
+        if [[ "${TEST_START_FAIL_ON:-}" == "${count}" ]]; then
+            exit 1
+        fi
         printf 'running\n' >"${TEST_SERVICE_STATE}"
         ;;
     stop)
@@ -62,7 +71,12 @@ EOF
     cat >"${fake_bin}/curl" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-[[ "${TEST_HEALTH_FAIL:-0}" != "1" ]]
+if [[ "${TEST_HEALTH_FAIL:-0}" == "1" ]]; then
+    exit 1
+fi
+if [[ "${TEST_EXIT_AFTER_HEALTH:-0}" == "1" ]]; then
+    printf 'stopped\n' >"${TEST_SERVICE_STATE}"
+fi
 EOF
 
     cat >"${fake_bin}/logger" <<'EOF'
@@ -107,7 +121,12 @@ run_deploy() {
         GONGXING_DEPLOY_TEST_MODE=1 \
         GONGXING_DEPLOY_TEST_ROOT="${root}" \
         TEST_SERVICE_STATE="${root}/service-state" \
+        TEST_START_COUNT="${root}/start-count" \
+        TEST_START_TARGETS="${root}/start-targets" \
+        TEST_CURRENT_LINK="${root}/opt/gongxing/current" \
         TEST_HEALTH_FAIL="${TEST_HEALTH_FAIL:-0}" \
+        TEST_EXIT_AFTER_HEALTH="${TEST_EXIT_AFTER_HEALTH:-0}" \
+        TEST_START_FAIL_ON="${TEST_START_FAIL_ON:-}" \
         PATH="${root}/fake-bin:${PATH}" \
         bash "${deploy_script}" --confirm-server "$@"
 }
@@ -147,6 +166,24 @@ test_initial_failure() {
     assert_absent "${current}"
     assert_eq "stopped" "$(cat "${root}/service-state")" \
         "failed initial deployment service state"
+    assert_exists "${root}/run/gongxing/maintenance"
+}
+
+test_initial_final_liveness_failure() {
+    local root artifact release current
+    root="$(new_case initial-final-liveness-failure)"
+    artifact="$(make_artifact "${root}" release)"
+    release="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    current="${root}/opt/gongxing/current"
+
+    if TEST_EXIT_AFTER_HEALTH=1 run_deploy "${root}" \
+        --initial-deploy --artifact "${artifact}" --release "${release}"; then
+        fail "initial deployment ignored a final liveness failure"
+    fi
+
+    assert_absent "${current}"
+    assert_eq "stopped" "$(cat "${root}/service-state")" \
+        "final liveness failure did not stop the initial service"
     assert_exists "${root}/run/gongxing/maintenance"
 }
 
@@ -321,12 +358,49 @@ test_subsequent_failure_rolls_back() {
     assert_exists "${root}/run/gongxing/maintenance"
 }
 
+test_subsequent_final_restore_failure_rolls_back() {
+    local root artifact old_release new_release current second_target third_target
+    old_release="ffffffffffffffffffffffffffffffffffffffff"
+    new_release="0123456789abcdef0123456789abcdef01234567"
+    root="$(prepare_subsequent_case subsequent-final-restore-failure "${old_release}")"
+    artifact="$(make_artifact "${root}" release)"
+    current="${root}/opt/gongxing/current"
+
+    if TEST_START_FAIL_ON=2 run_deploy "${root}" \
+        --confirmed-backup abcdef1234567890 \
+        --artifact "${artifact}" --release "${new_release}"; then
+        fail "subsequent deployment ignored a failed final new-release start"
+    fi
+
+    assert_eq \
+        "${root}/opt/gongxing/releases/${old_release}" \
+        "$(readlink -f -- "${current}")" \
+        "final restore failure did not roll back current"
+    assert_eq "running" "$(cat "${root}/service-state")" \
+        "old release was not restarted after final restore failure"
+    assert_exists "${root}/run/gongxing/maintenance"
+    assert_eq "3" "$(cat "${root}/start-count")" \
+        "final restore failure did not make three distinct start attempts"
+    second_target="$(sed -n '2p' "${root}/start-targets")"
+    third_target="$(sed -n '3p' "${root}/start-targets")"
+    assert_eq \
+        "2:${root}/opt/gongxing/releases/${new_release}" \
+        "${second_target}" \
+        "second start did not target the new release"
+    assert_eq \
+        "3:${root}/opt/gongxing/releases/${old_release}" \
+        "${third_target}" \
+        "third start did not target the rolled-back release"
+}
+
 test_initial_success
 test_initial_failure
+test_initial_final_liveness_failure
 test_repeated_initial_deploy
 test_initial_persistent_data_guards
 test_subsequent_requires_backup
 test_subsequent_success
 test_subsequent_stopped_state
 test_subsequent_failure_rolls_back
+test_subsequent_final_restore_failure_rolls_back
 printf 'deploy release behavior tests: ok\n'
