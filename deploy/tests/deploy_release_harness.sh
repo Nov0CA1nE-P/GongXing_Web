@@ -304,6 +304,8 @@ test_initial_service_exit_during_health_wait() {
 
     assert_eq "2" "$(cat "${root}/health-count")" \
         "service exit was not detected before another health request"
+    assert_eq "1" "$(cat "${root}/sleep-count")" \
+        "service exit triggered an extra retry sleep"
     assert_absent "${current}"
     assert_absent "${root}/opt/gongxing/releases/${release}"
     assert_eq "stopped" "$(cat "${root}/service-state")" \

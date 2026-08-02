@@ -28,6 +28,11 @@ wait_for_application_health() {
             http://127.0.0.1:8000/api/health >/dev/null; then
             return 0
         fi
+        if ! service_is_active; then
+            logger -p user.err -t gongxing-deploy \
+                "application service exited during a failed health request"
+            return 1
+        fi
         if [[ "${attempt}" -lt "${HEALTH_MAX_ATTEMPTS}" ]]; then
             sleep "${HEALTH_RETRY_INTERVAL_SECONDS}"
         fi

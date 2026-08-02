@@ -216,6 +216,7 @@ class DeploymentAssetTests(unittest.TestCase):
             deploy.index("wait_for_application_health()"):
             deploy.index("require_server_confirmation")
         ]
+        self.assertEqual(wait_body.count("if ! service_is_active; then"), 2)
         self.assertNotRegex(wait_body, r"systemctl\s+(?:start|restart)")
 
     def test_production_environment_layout_is_exact(self):
