@@ -37,6 +37,10 @@ new_case() {
     local root="${test_parent}/${name}"
     local fake_bin="${root}/fake-bin"
     mkdir -p "${fake_bin}" "${root}/var/lib/gongxing/data/uploads"
+    mkdir -p "${root}/etc/gongxing"
+    printf 'APP_ENV=production\n' >"${root}/etc/gongxing/gongxing.env"
+    chmod 0750 "${root}/etc/gongxing"
+    chmod 0640 "${root}/etc/gongxing/gongxing.env"
     printf 'stopped\n' >"${root}/service-state"
     printf '0\n' >"${root}/start-count"
     : >"${root}/start-targets"
@@ -103,17 +107,32 @@ EOF
     cat >"${fake_bin}/python3.12" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-if [[ "${1:-}" != "-m" || "${2:-}" != "venv" || -z "${3:-}" ]]; then
+if [[ "${1:-}" == *release_integrity.py ]]; then
+    exec python3 "$@"
+elif [[ "${1:-}" == "-m" && "${2:-}" == "venv" && -n "${3:-}" ]]; then
+    target="$3"
+    mkdir -p "${target}/bin"
+    cat >"${target}/bin/python" <<'INNER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${1:-}" == *validate-production-config.py ]]; then
+    if [[ -n "${TEST_CONFIG_VALIDATION_FAILURE:-}" ]]; then
+        echo "production configuration validation failed" >&2
+        exit 1
+    fi
+    exit 0
+fi
+if [[ "${1:-}" == "-m" && "${2:-}" == "pip" ]]; then
+    exit 0
+fi
+echo "unexpected release venv python command: $*" >&2
+exit 2
+INNER
+    chmod 0750 "${target}/bin/python"
+else
     echo "unexpected python3.12 command: $*" >&2
     exit 2
 fi
-target="$3"
-mkdir -p "${target}/bin"
-cat >"${target}/bin/python" <<'INNER'
-#!/usr/bin/env bash
-exit 0
-INNER
-chmod 0750 "${target}/bin/python"
 EOF
     chmod 0750 "${fake_bin}/systemctl" "${fake_bin}/curl" \
         "${fake_bin}/logger" "${fake_bin}/rm" "${fake_bin}/python3.12"
@@ -125,14 +144,36 @@ make_artifact() {
     local name="$2"
     local artifact="${root}/artifacts/${name}"
     mkdir -p "${artifact}/backend" "${artifact}/frontend/dist"
+    mkdir -p "${artifact}/wheelhouse"
     printf '# test lock\n' >"${artifact}/backend/requirements.lock"
     printf '<!doctype html>\n' >"${artifact}/frontend/dist/index.html"
+    printf 'test wheel\n' >"${artifact}/wheelhouse/test-1.0-py3-none-any.whl"
+    (
+        cd "${artifact}/wheelhouse"
+        sha256sum test-1.0-py3-none-any.whl \
+            >"${artifact}/WHEELHOUSE_SHA256SUMS"
+    )
     printf '%s\n' "${artifact}"
 }
 
 run_deploy() {
     local root="$1"
     shift
+    local artifact="" release="" manifest="" index
+    local -a arguments=("$@")
+    for ((index = 0; index < ${#arguments[@]}; index++)); do
+        case "${arguments[index]}" in
+            --artifact) artifact="${arguments[index + 1]}" ;;
+            --release) release="${arguments[index + 1]}" ;;
+        esac
+    done
+    manifest="${artifact}.integrity.json"
+    rm -f -- "${manifest}"
+    python3 "${repo_root}/deploy/scripts/release_integrity.py" create \
+        --directory "${artifact}" \
+        --release "${release}" \
+        --archive-sha256 "$(printf '0%.0s' {1..64})" \
+        --output "${manifest}"
     env \
         GONGXING_DEPLOY_TEST_MODE=1 \
         GONGXING_DEPLOY_TEST_ROOT="${root}" \
@@ -144,10 +185,12 @@ run_deploy() {
         TEST_EXIT_AFTER_HEALTH="${TEST_EXIT_AFTER_HEALTH:-0}" \
         TEST_START_FAIL_ON="${TEST_START_FAIL_ON:-}" \
         TEST_MAINTENANCE_DELETE_FAIL="${TEST_MAINTENANCE_DELETE_FAIL:-0}" \
+        TEST_CONFIG_VALIDATION_FAILURE="${TEST_CONFIG_VALIDATION_FAILURE:-}" \
         TEST_MAINTENANCE_FILE="${root}/run/gongxing/maintenance" \
         TEST_MAINTENANCE_DELETE_ATTEMPTS="${root}/maintenance-delete-attempts" \
         PATH="${root}/fake-bin:${PATH}" \
-        bash "${deploy_script}" --confirm-server "$@"
+        bash "${deploy_script}" --confirm-server "$@" \
+        --artifact-manifest "${manifest}"
 }
 
 test_initial_success() {
@@ -226,6 +269,24 @@ test_initial_maintenance_clear_failure() {
     assert_exists "${root}/run/gongxing/maintenance"
     assert_eq "1" "$(cat "${root}/maintenance-delete-attempts")" \
         "initial failure retried maintenance clear after rollback"
+}
+
+test_initial_config_validation_failure() {
+    local root artifact release current
+    root="$(new_case initial-config-failure)"
+    artifact="$(make_artifact "${root}" release)"
+    release="abababababababababababababababababababab"
+    current="${root}/opt/gongxing/current"
+
+    if TEST_CONFIG_VALIDATION_FAILURE=app-env run_deploy "${root}" \
+        --initial-deploy --artifact "${artifact}" --release "${release}"; then
+        fail "initial deployment ignored production configuration failure"
+    fi
+    assert_absent "${current}"
+    assert_absent "${root}/opt/gongxing/releases/${release}"
+    assert_eq "stopped" "$(cat "${root}/service-state")" \
+        "initial configuration failure changed service state"
+    assert_absent "${root}/run/gongxing/maintenance"
 }
 
 test_repeated_initial_deploy() {
@@ -331,6 +392,30 @@ test_subsequent_requires_backup() {
         --artifact "${artifact}" --release "${new_release}"; then
         fail "mutually exclusive deployment modes were accepted"
     fi
+}
+
+test_subsequent_config_failures_preserve_old_release() {
+    local failure root artifact old_release new_release current
+    for failure in app-env trusted-origins trusted-proxy data-path admin-password env-mode env-owner validator-exit; do
+        old_release="1010101010101010101010101010101010101010"
+        new_release="2020202020202020202020202020202020202020"
+        root="$(prepare_subsequent_case "config-failure-${failure}" "${old_release}")"
+        artifact="$(make_artifact "${root}" release)"
+        current="${root}/opt/gongxing/current"
+        if TEST_CONFIG_VALIDATION_FAILURE="${failure}" run_deploy "${root}" \
+            --confirmed-backup abcdef1234567890 \
+            --artifact "${artifact}" --release "${new_release}"; then
+            fail "deployment ignored ${failure} configuration failure"
+        fi
+        assert_eq \
+            "${root}/opt/gongxing/releases/${old_release}" \
+            "$(readlink -f -- "${current}")" \
+            "${failure} configuration failure changed current"
+        assert_absent "${root}/opt/gongxing/releases/${new_release}"
+        assert_eq "running" "$(cat "${root}/service-state")" \
+            "${failure} configuration failure interrupted old service"
+        assert_absent "${root}/run/gongxing/maintenance"
+    done
 }
 
 test_subsequent_success() {
@@ -467,9 +552,11 @@ test_initial_success
 test_initial_failure
 test_initial_final_liveness_failure
 test_initial_maintenance_clear_failure
+test_initial_config_validation_failure
 test_repeated_initial_deploy
 test_initial_persistent_data_guards
 test_subsequent_requires_backup
+test_subsequent_config_failures_preserve_old_release
 test_subsequent_success
 test_subsequent_stopped_state
 test_subsequent_failure_rolls_back

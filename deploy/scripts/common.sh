@@ -86,3 +86,13 @@ disable_maintenance() {
 service_is_active() {
     systemctl is-active --quiet "${GONGXING_SERVICE}"
 }
+
+require_approved_offsite_repository() {
+    if [[ "${OFFSITE_BACKUP_APPROVED:-}" != "1" ]]; then
+        echo "error: offsite backup has not been explicitly approved" >&2
+        exit 78
+    fi
+    : "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/validate_restic_repository.py" \
+        "${RESTIC_REPOSITORY}"
+}

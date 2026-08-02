@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
@@ -153,50 +152,95 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("--workers 1", unit)
         self.assertIn("--forwarded-allow-ips 127.0.0.1", unit)
 
-    def test_deploy_release_modes_and_state_transitions(self):
-        harness = ROOT / "deploy/tests/deploy_release_harness.sh"
-        if os.name == "nt":
-            drive = harness.drive.rstrip(":").lower()
-            relative = harness.relative_to(harness.anchor).as_posix()
-            converted = f"/mnt/{drive}/{relative}"
-            command = ["wsl", "bash", converted]
-        else:
-            command = ["bash", str(harness)]
-        result = subprocess.run(
-            command,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=60,
-        )
-        self.assertEqual(
-            result.returncode,
-            0,
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
-        )
-        self.assertIn("deploy release behavior tests: ok", result.stdout)
+    def test_deployment_behavior_harnesses(self):
+        harnesses = {
+            "deploy_release_harness.sh": "deploy release behavior tests: ok",
+            "release_package_harness.sh": "release package behavior tests: ok",
+            "production_config_harness.sh": "production config behavior tests: ok",
+            "certbot_hook_harness.sh": "certbot hook behavior tests: ok",
+            "offsite_backup_harness.sh": "offsite backup behavior tests: ok",
+        }
+        for name, success_marker in harnesses.items():
+            with self.subTest(harness=name):
+                harness = ROOT / "deploy/tests" / name
+                if os.name == "nt":
+                    drive = harness.drive.rstrip(":").lower()
+                    relative = harness.relative_to(harness.anchor).as_posix()
+                    command = ["wsl", "bash", f"/mnt/{drive}/{relative}"]
+                else:
+                    command = ["bash", str(harness)]
+                result = subprocess.run(
+                    command,
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    timeout=90,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+                )
+                self.assertIn(success_marker, result.stdout)
 
-    def test_spaces_lifecycle_is_valid_and_bounded(self):
-        lifecycle = json.loads(self.read("deploy/spaces/lifecycle.json"))
-        rules = {rule["ID"]: rule for rule in lifecycle["Rules"]}
-        self.assertEqual(
-            rules["expire-noncurrent-versions-after-30-days"][
-                "NoncurrentVersionExpiration"
-            ]["NoncurrentDays"],
-            30,
+    def test_release_install_is_offline_and_pre_switch_validated(self):
+        build = self.read("deploy/scripts/build-release.sh")
+        deploy = self.read("deploy/scripts/deploy-release.sh")
+        self.assertIn("--only-binary=:all:", build)
+        self.assertIn("--require-hashes", build)
+        self.assertIn("--no-index", deploy)
+        self.assertIn("release_integrity.py\" verify", deploy)
+        validator = deploy.index("validate-production-config.py")
+        switch = deploy.index('mv -- "${temporary_release}" "${release_dir}"')
+        self.assertLess(validator, switch)
+
+    def test_production_environment_layout_is_exact(self):
+        runbook = self.read("docs/deployment-runbook.md")
+        validator = self.read("deploy/scripts/validate-production-config.py")
+        harness = self.read("deploy/tests/production_config_harness.sh")
+        self.assertIn(
+            "install -d -o root -g gongxing -m 0750 /etc/gongxing",
+            runbook,
         )
-        self.assertEqual(
-            rules["abort-incomplete-multipart-after-1-day"][
-                "AbortIncompleteMultipartUpload"
-            ]["DaysAfterInitiation"],
-            1,
-        )
-        self.assertTrue(
-            rules["remove-expired-delete-markers"]["Expiration"][
-                "ExpiredObjectDeleteMarker"
-            ]
-        )
+        self.assertIn("install -o root -g gongxing -m 0640", runbook)
+        self.assertIn("stat.S_IMODE(metadata.st_mode) != 0o640", validator)
+        self.assertIn("stat.S_IMODE(parent_metadata.st_mode) != 0o750", validator)
+        self.assertIn('env_dir="${test_root}/etc/gongxing"', harness)
+        self.assertIn('chmod 0750 "${env_dir}"', harness)
+        self.assertIn('chmod 0640 "${path}"', harness)
+
+    def test_offsite_backup_requires_exact_approval_and_remote_repository(self):
+        common = self.read("deploy/scripts/common.sh")
+        self.assertIn('"${OFFSITE_BACKUP_APPROVED:-}" != "1"', common)
+        parser = self.read("deploy/scripts/validate_restic_repository.py")
+        self.assertIn("socket.getaddrinfo", parser)
+        self.assertIn("ipv4_mapped", parser)
+        self.assertIn("address.is_loopback", parser)
+        self.assertFalse((ROOT / "deploy/scripts/configure-spaces.sh").exists())
+        self.assertFalse((ROOT / "deploy/spaces/lifecycle.json").exists())
+
+    def test_certbot_hook_validates_before_reload(self):
+        hook = self.read("deploy/scripts/certbot-reload-nginx.sh")
+        self.assertLess(hook.index("nginx -t"), hook.index("systemctl reload"))
+        installer = self.read("docs/deployment-runbook.md")
+        self.assertIn("install -o root -g root -m 0755", installer)
+        verifier = self.read("deploy/scripts/verify-certbot-hook.py")
+        self.assertIn("lstat()", verifier)
+        self.assertIn("0o022", verifier)
+
+    def test_release_archive_budgets_are_fixed(self):
+        verifier = self.read("deploy/scripts/verify_release_archive.py")
+        for value in (
+            "MAX_ARCHIVE_BYTES = 64 * MIB",
+            "MAX_MEMBER_COUNT = 4096",
+            "MAX_MEMBER_DECLARED_BYTES = 32 * MIB",
+            "MAX_TOTAL_DECLARED_BYTES = 256 * MIB",
+            "MAX_COMPRESSION_RATIO = 40",
+            "MAX_ACTUAL_WRITTEN_BYTES = 256 * MIB",
+        ):
+            self.assertIn(value, verifier)
+        self.assertNotIn("extractall", verifier)
 
     def test_ci_has_read_only_permissions_and_no_deployment(self):
         workflow = self.read(".github/workflows/ci.yml")
