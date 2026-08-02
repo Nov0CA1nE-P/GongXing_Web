@@ -195,6 +195,21 @@ class DeploymentAssetTests(unittest.TestCase):
         switch = deploy.index('mv -- "${temporary_release}" "${release_dir}"')
         self.assertLess(validator, switch)
 
+    def test_production_environment_layout_is_exact(self):
+        runbook = self.read("docs/deployment-runbook.md")
+        validator = self.read("deploy/scripts/validate-production-config.py")
+        harness = self.read("deploy/tests/production_config_harness.sh")
+        self.assertIn(
+            "install -d -o root -g gongxing -m 0750 /etc/gongxing",
+            runbook,
+        )
+        self.assertIn("install -o root -g gongxing -m 0640", runbook)
+        self.assertIn("stat.S_IMODE(metadata.st_mode) != 0o640", validator)
+        self.assertIn("stat.S_IMODE(parent_metadata.st_mode) != 0o750", validator)
+        self.assertIn('env_dir="${test_root}/etc/gongxing"', harness)
+        self.assertIn('chmod 0750 "${env_dir}"', harness)
+        self.assertIn('chmod 0640 "${path}"', harness)
+
     def test_offsite_backup_requires_exact_approval_and_remote_repository(self):
         common = self.read("deploy/scripts/common.sh")
         self.assertIn('"${OFFSITE_BACKUP_APPROVED:-}" != "1"', common)

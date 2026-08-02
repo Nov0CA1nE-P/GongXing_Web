@@ -47,7 +47,19 @@ wheel、wheel 哈希异常，以及 data、`.env`、数据库、PDF和秘密文�
 前端。2 GiB 机器建议评估并创建 1 GiB swap；只有观测到确切需求才扩大到
 2 GiB。FastAPI systemd 单进程仅监听 `127.0.0.1:8000`。
 
-创建 `/etc/gongxing/gongxing.env`，属主 `root:gongxing`，权限 `0640` 或更严：
+使用统一的 production 环境目录与文件权限安装模板：
+
+```bash
+sudo install -d -o root -g gongxing -m 0750 /etc/gongxing
+sudo install -o root -g gongxing -m 0640 \
+  deploy/env/gongxing.env.example \
+  /etc/gongxing/gongxing.env
+```
+
+`/etc/gongxing` 必须为 `root:gongxing 0750`，环境文件必须为
+`root:gongxing 0640`；父目录和文件均不得是符号链接、不得组写或被其他用户
+写入。这样 `gongxing` 服务账户可遍历目录并读取环境文件。随后只在服务器或
+密码管理器中填写真实值，禁止把值回显到终端、Git、CI 或聊天：
 
 ```dotenv
 APP_ENV=production

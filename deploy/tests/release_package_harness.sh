@@ -86,7 +86,8 @@ expect_verify_failure "${test_root}/wrong-digest.tar.gz" "${test_root}/digest-ou
 
 for case_name in wrong-sha forbidden-env forbidden-env-production forbidden-data \
     forbidden-db forbidden-pdf forbidden-key wheel-missing wheel-extra wheel-duplicate \
-    wheel-digest sdist symlink nested-wheelhouse lock-digest package-lock-digest \
+    wheel-digest sdist symlink nested-wheelhouse wheelhouse-nested-entry \
+    wheelhouse-non-wheel wheelhouse-symlink lock-digest package-lock-digest \
     manifest-missing manifest-duplicate case-collision unicode-collision \
     backslash duplicate-member prefix-conflict; do
     source_dir="${test_root}/${case_name}-source"
@@ -118,6 +119,17 @@ for case_name in wrong-sha forbidden-env forbidden-env-production forbidden-data
         sdist) printf 'source\n' >"${source_dir}/wheelhouse/example-1.0.tar.gz" ;;
         symlink) ln -s backend "${source_dir}/backend-link" ;;
         nested-wheelhouse) mkdir -p "${source_dir}/frontend/wheelhouse" ;;
+        wheelhouse-nested-entry)
+            mkdir -p "${source_dir}/wheelhouse/nested"
+            printf 'unexpected\n' >"${source_dir}/wheelhouse/nested/unexpected.txt"
+            ;;
+        wheelhouse-non-wheel)
+            printf 'unexpected\n' >"${source_dir}/wheelhouse/unexpected.txt"
+            ;;
+        wheelhouse-symlink)
+            ln -s example-1.0-py3-none-any.whl \
+                "${source_dir}/wheelhouse/linked.whl"
+            ;;
         lock-digest) printf '\n# changed\n' >>"${source_dir}/backend/requirements.lock" ;;
         package-lock-digest) printf 'changed\n' >>"${source_dir}/frontend/package-lock.json" ;;
         manifest-missing) sed -i '/^npm_version=/d' "${source_dir}/RELEASE_BUILD_MANIFEST.txt" ;;

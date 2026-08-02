@@ -39,6 +39,8 @@ new_case() {
     mkdir -p "${fake_bin}" "${root}/var/lib/gongxing/data/uploads"
     mkdir -p "${root}/etc/gongxing"
     printf 'APP_ENV=production\n' >"${root}/etc/gongxing/gongxing.env"
+    chmod 0750 "${root}/etc/gongxing"
+    chmod 0640 "${root}/etc/gongxing/gongxing.env"
     printf 'stopped\n' >"${root}/service-state"
     printf '0\n' >"${root}/start-count"
     : >"${root}/start-targets"

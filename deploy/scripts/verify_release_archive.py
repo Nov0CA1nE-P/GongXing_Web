@@ -9,6 +9,7 @@ import io
 import os
 import re
 import shutil
+import stat
 import tarfile
 import tempfile
 import unicodedata
@@ -112,9 +113,13 @@ def validate_wheelhouse(root: Path) -> None:
     checksum_file = root / "WHEELHOUSE_SHA256SUMS"
     if not wheelhouse.is_dir() or not checksum_file.is_file():
         raise RuntimeError("offline wheelhouse is incomplete")
-    wheel_files = sorted(path for path in wheelhouse.iterdir() if path.is_file())
-    if not wheel_files or any(path.suffix != ".whl" for path in wheel_files):
+    wheel_files = sorted(wheelhouse.iterdir(), key=lambda path: path.name)
+    if not wheel_files:
         raise RuntimeError("wheelhouse must contain wheels only")
+    for path in wheel_files:
+        metadata = path.lstat()
+        if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or path.suffix != ".whl":
+            raise RuntimeError("wheelhouse must contain regular wheel files only")
     expected_checksums: dict[str, str] = {}
     for line in checksum_file.read_text(encoding="ascii").splitlines():
         match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9._-]+\.whl)", line)

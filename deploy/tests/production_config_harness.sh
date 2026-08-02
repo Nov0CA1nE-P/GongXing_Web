@@ -57,7 +57,7 @@ DATABASE_PATH=${database}
 ADMIN_PASSWORD=${password}
 DEEPSEEK_API_KEY=SECRET-SENTINEL-MUST-NOT-LEAK
 EOF
-    chmod 0600 "${path}"
+    chmod 0640 "${path}"
 }
 
 expect_failure() {
@@ -73,35 +73,46 @@ expect_failure() {
 
 release="${test_root}/release"
 make_release "${release}"
-valid_env="${test_root}/valid.env"
+env_dir="${test_root}/etc/gongxing"
+mkdir -p "${env_dir}"
+chmod 0750 "${env_dir}"
+valid_env="${env_dir}/gongxing.env"
 write_env "${valid_env}"
+[[ "$(stat -c %a "${env_dir}")" == "750" ]] || fail "valid env directory mode is not 0750"
+[[ "$(stat -c %a "${valid_env}")" == "640" ]] || fail "valid env file mode is not 0640"
+[[ "$(stat -c %A "${env_dir}")" == *"r-x"* ]] || fail "service group cannot traverse env directory"
+[[ "$(stat -c %A "${valid_env}")" == *"r--"* ]] || fail "service group cannot read env file"
 GONGXING_DEPLOY_TEST_MODE=1 python3 "${validator}" --test-mode \
     --env-file "${valid_env}" --release-dir "${release}"
 
-write_env "${test_root}/app.env" development
-expect_failure app-env "${test_root}/app.env" "${release}"
-write_env "${test_root}/origin.env" production https://wrong.example
-expect_failure trusted-origin "${test_root}/origin.env" "${release}"
-write_env "${test_root}/proxy.env" production https://test.novocaine.me 10.0.0.1
-expect_failure trusted-proxy "${test_root}/proxy.env" "${release}"
-write_env "${test_root}/data.env" production https://test.novocaine.me 127.0.0.1 /tmp/site.db
-expect_failure data-path "${test_root}/data.env" "${release}"
-write_env "${test_root}/password.env" production https://test.novocaine.me 127.0.0.1 /var/lib/gongxing/data/site.db short
-expect_failure admin-password "${test_root}/password.env" "${release}"
+write_env "${env_dir}/app.env" development
+expect_failure app-env "${env_dir}/app.env" "${release}"
+write_env "${env_dir}/origin.env" production https://wrong.example
+expect_failure trusted-origin "${env_dir}/origin.env" "${release}"
+write_env "${env_dir}/proxy.env" production https://test.novocaine.me 10.0.0.1
+expect_failure trusted-proxy "${env_dir}/proxy.env" "${release}"
+write_env "${env_dir}/data.env" production https://test.novocaine.me 127.0.0.1 /tmp/site.db
+expect_failure data-path "${env_dir}/data.env" "${release}"
+write_env "${env_dir}/password.env" production https://test.novocaine.me 127.0.0.1 /var/lib/gongxing/data/site.db short
+expect_failure admin-password "${env_dir}/password.env" "${release}"
 
-cp "${valid_env}" "${test_root}/mode.env"
-chmod 0664 "${test_root}/mode.env"
-expect_failure env-mode "${test_root}/mode.env" "${release}"
+cp "${valid_env}" "${env_dir}/mode.env"
+chmod 0600 "${env_dir}/mode.env"
+expect_failure env-mode "${env_dir}/mode.env" "${release}"
 
-ln -s "${valid_env}" "${test_root}/linked.env"
-expect_failure env-symlink "${test_root}/linked.env" "${release}"
-ln -s "${test_root}/missing.env" "${test_root}/dangling.env"
-expect_failure dangling-env-symlink "${test_root}/dangling.env" "${release}"
+ln -s "${valid_env}" "${env_dir}/linked.env"
+expect_failure env-symlink "${env_dir}/linked.env" "${release}"
+ln -s "${env_dir}/missing.env" "${env_dir}/dangling.env"
+expect_failure dangling-env-symlink "${env_dir}/dangling.env" "${release}"
 
-mkdir -m 0700 "${test_root}/real-parent"
+mkdir -m 0750 "${test_root}/real-parent"
 write_env "${test_root}/real-parent/parent.env"
 ln -s "${test_root}/real-parent" "${test_root}/linked-parent"
 expect_failure parent-symlink "${test_root}/linked-parent/parent.env" "${release}"
+
+mkdir -m 0770 "${test_root}/writable-parent"
+write_env "${test_root}/writable-parent/parent.env"
+expect_failure parent-mode "${test_root}/writable-parent/parent.env" "${release}"
 
 python3 - "${validator}" "${valid_env}" "${test_root}" <<'PY'
 import importlib.util
@@ -123,10 +134,10 @@ else:
     raise SystemExit(1)
 
 race_parent = Path(sys.argv[3]) / "race-parent"
-race_parent.mkdir(mode=0o700)
+race_parent.mkdir(mode=0o750)
 race_env = race_parent / "race.env"
 shutil.copyfile(sys.argv[2], race_env)
-race_env.chmod(0o600)
+race_env.chmod(0o640)
 old_parent = race_parent.with_name("race-parent-old")
 original_open = os.open
 replaced = False
@@ -134,9 +145,9 @@ def replacing_open(path, flags, *args, **kwargs):
     global replaced
     if flags & os.O_DIRECTORY and not replaced:
         race_parent.rename(old_parent)
-        race_parent.mkdir(mode=0o700)
+        race_parent.mkdir(mode=0o750)
         shutil.copyfile(old_parent / "race.env", race_parent / "race.env")
-        (race_parent / "race.env").chmod(0o600)
+        (race_parent / "race.env").chmod(0o640)
         replaced = True
     return original_open(path, flags, *args, **kwargs)
 

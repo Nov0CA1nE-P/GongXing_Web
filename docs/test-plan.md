@@ -393,11 +393,15 @@
       `.env.production` 和非规定位置 wheelhouse 均被拒绝
 - [ ] manifest 字段完整且唯一，Git SHA、requirements lock、package lock 和
       wheel 清单摘要均按实际文件验证
-- [ ] wheelhouse 与哈希锁定安装计划严格一致，额外/缺失/重复 wheel、sdist、
-      无关文件和摘要不符均被拒绝
+- [ ] wheelhouse 与哈希锁定安装计划严格一致；根目录的每个直接条目都必须是
+      非符号链接的普通 `.whl` 文件，额外/缺失/重复 wheel、子目录、sdist、
+      无关文件、特殊文件、符号链接和摘要不符均被拒绝
 - [ ] 验证后新增、删除或修改发布目录内容会在部署复制前被二次校验拒绝
 - [ ] 服务器离线安装 wheel，不访问公共 Python 源且不编译源码依赖
 - [ ] production 配置检查在切换 current、维护和停止旧服务之前完成
+- [ ] `/etc/gongxing` 为 `root:gongxing 0750`，`gongxing.env` 为
+      `root:gongxing 0640`；二者均非符号链接且不可组写/被其他用户写入，
+      服务账户可遍历目录并读取文件
 - [ ] APP_ENV、Origin、代理 IP、数据路径、管理员密码、env 属主/权限或
       验证脚本失败均不切换 current、不影响旧服务且不输出秘密
 - [ ] `--initial-deploy` 只在无 current、服务停止、无 release、无数据库、

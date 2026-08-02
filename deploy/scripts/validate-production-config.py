@@ -20,14 +20,14 @@ def open_verified_environment(path: Path, expected_uid: int, expected_gid: int):
         raise RuntimeError("environment file must be a regular file")
     if metadata.st_uid != expected_uid or metadata.st_gid != expected_gid:
         raise RuntimeError("environment file owner or group is invalid")
-    if stat.S_IMODE(metadata.st_mode) not in {0o600, 0o640}:
+    if stat.S_IMODE(metadata.st_mode) != 0o640:
         raise RuntimeError("environment file permissions are invalid")
 
     parent_metadata = lexical.parent.lstat()
     if stat.S_ISLNK(parent_metadata.st_mode) or not stat.S_ISDIR(parent_metadata.st_mode):
         raise RuntimeError("environment file parent directory is invalid")
     if (parent_metadata.st_uid, parent_metadata.st_gid) != (expected_uid, expected_gid) or \
-       stat.S_IMODE(parent_metadata.st_mode) & 0o022:
+       stat.S_IMODE(parent_metadata.st_mode) != 0o750:
         raise RuntimeError("environment file parent directory is unsafe")
 
     parent_fd = os.open(lexical.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)

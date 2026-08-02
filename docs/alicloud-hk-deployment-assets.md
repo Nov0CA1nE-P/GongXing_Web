@@ -38,7 +38,9 @@
   只允许预定义唯一字段，并实际核对 Git SHA、两个 lock 摘要及 wheel 清单摘要。
 - `deploy-release.sh` 在同一把 `flock` 锁中于复制前和复制后复算清单，拒绝
   验证后新增、删除或修改文件。
-- `/etc/gongxing/gongxing.env` 必须先创建为 `root:gongxing 0640` 或更严格。
+- `/etc/gongxing` 必须为 `root:gongxing 0750`，其中 `gongxing.env` 必须为
+  `root:gongxing 0640`；父目录和文件均不得是符号链接、组写或被其他用户写入，
+  同时保留服务账户遍历目录和读取配置所需的组权限。
   临时 release 离线装好依赖后，部署脚本在切换 `current` 前执行 production
   配置检查；任何失败都清理临时目录，不影响旧服务和旧链接。
 - 首次部署与后续部署都执行配置检查。检查覆盖 production、唯一可信 Origin、
