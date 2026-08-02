@@ -76,11 +76,11 @@ def main() -> int:
 
     if config.APP_ENV != "production":
         raise RuntimeError("APP_ENV is not production")
-    if config.TRUSTED_ORIGINS != ["https://test.novocaine.me"]:
+    if config.TRUSTED_ORIGINS != ("https://test.novocaine.me",):
         raise RuntimeError("trusted origins do not match the restricted site")
     if config.CORS_ALLOWED_ORIGINS:
         raise RuntimeError("same-origin production must not enable CORS")
-    if config.TRUSTED_PROXY_IPS != ["127.0.0.1"]:
+    if config.TRUSTED_PROXY_IPS != ("127.0.0.1",):
         raise RuntimeError("trusted proxy must be the local Nginx address")
     if not config.ADMIN_COOKIE_SECURE or not config.UVICORN_PROXY_HEADERS:
         raise RuntimeError("production cookie or proxy mode is disabled")

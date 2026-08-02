@@ -210,6 +210,24 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn('chmod 0750 "${env_dir}"', harness)
         self.assertIn('chmod 0640 "${path}"', harness)
 
+    def test_production_config_uses_exact_tuple_contracts(self):
+        validator = self.read("deploy/scripts/validate-production-config.py")
+        harness = self.read("deploy/tests/production_config_harness.sh")
+        self.assertIn(
+            'config.TRUSTED_ORIGINS != ("https://test.novocaine.me",)',
+            validator,
+        )
+        self.assertIn(
+            'config.TRUSTED_PROXY_IPS != ("127.0.0.1",)',
+            validator,
+        )
+        self.assertNotIn("list(config.TRUSTED_ORIGINS)", validator)
+        self.assertNotIn("tuple(config.TRUSTED_ORIGINS)", validator)
+        self.assertNotIn("list(config.TRUSTED_PROXY_IPS)", validator)
+        self.assertNotIn("tuple(config.TRUSTED_PROXY_IPS)", validator)
+        self.assertIn('cp "${repo_root}/backend/config.py"', harness)
+        self.assertIn("expect_failure wrong-return-type", harness)
+
     def test_offsite_backup_requires_exact_approval_and_remote_repository(self):
         common = self.read("deploy/scripts/common.sh")
         self.assertIn('"${OFFSITE_BACKUP_APPROVED:-}" != "1"', common)

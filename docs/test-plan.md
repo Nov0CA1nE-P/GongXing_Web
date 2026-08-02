@@ -399,6 +399,10 @@
 - [ ] 验证后新增、删除或修改发布目录内容会在部署复制前被二次校验拒绝
 - [ ] 服务器离线安装 wheel，不访问公共 Python 源且不编译源码依赖
 - [ ] production 配置检查在切换 current、维护和停止旧服务之前完成
+- [ ] production 验证器直接加载真实 `backend/config.py`；正确配置返回精确的
+      tuple Origin/代理契约并通过，值正确但返回 list 等错误类型时仍必须失败
+- [ ] 错误 Origin、错误代理 IP 继续失败；隔离测试不读取真实 `.env`，失败输出
+      不包含管理员密码或 API Key
 - [ ] `/etc/gongxing` 为 `root:gongxing 0750`，`gongxing.env` 为
       `root:gongxing 0640`；二者均非符号链接且不可组写/被其他用户写入，
       服务账户可遍历目录并读取文件
