@@ -9,7 +9,28 @@ cleanup() { rm -rf -- "${test_root}"; }
 trap cleanup EXIT INT TERM HUP
 fail() { echo "production config behavior test failed: $*" >&2; exit 1; }
 
-make_release() {
+make_real_release() {
+    local target="$1"
+    mkdir -p "${target}/backend"
+    ln -s /var/lib/gongxing/data "${target}/data"
+    cp "${repo_root}/backend/config.py" "${target}/backend/config.py"
+    cp "${repo_root}/backend/origin_normalization.py" "${target}/backend/origin_normalization.py"
+    cat >"${target}/backend/dotenv.py" <<'PY'
+def load_dotenv(*args, **kwargs):
+    return False
+
+def dotenv_values(path=None, stream=None):
+    values = {}
+    source = stream.read() if stream is not None else path.read_text(encoding="utf-8")
+    for line in source.splitlines():
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            values[key] = value
+    return values
+PY
+}
+
+make_wrong_type_release() {
     local target="$1"
     mkdir -p "${target}/backend"
     ln -s /var/lib/gongxing/data "${target}/data"
@@ -72,7 +93,9 @@ expect_failure() {
 }
 
 release="${test_root}/release"
-make_release "${release}"
+make_real_release "${release}"
+wrong_type_release="${test_root}/wrong-type-release"
+make_wrong_type_release "${wrong_type_release}"
 env_dir="${test_root}/etc/gongxing"
 mkdir -p "${env_dir}"
 chmod 0750 "${env_dir}"
@@ -84,6 +107,24 @@ write_env "${valid_env}"
 [[ "$(stat -c %A "${valid_env}")" == *"r--"* ]] || fail "service group cannot read env file"
 GONGXING_DEPLOY_TEST_MODE=1 python3 "${validator}" --test-mode \
     --env-file "${valid_env}" --release-dir "${release}"
+
+APP_ENV=production \
+TRUSTED_ORIGINS=https://test.novocaine.me \
+CORS_ALLOWED_ORIGINS= \
+TRUSTED_PROXY_IPS=127.0.0.1 \
+DATABASE_PATH=/var/lib/gongxing/data/site.db \
+ADMIN_PASSWORD=valid-password-123 \
+PYTHONPATH="${release}/backend" \
+python3 - <<'PY'
+import config
+
+assert type(config.TRUSTED_ORIGINS) is tuple
+assert config.TRUSTED_ORIGINS == ("https://test.novocaine.me",)
+assert type(config.TRUSTED_PROXY_IPS) is tuple
+assert config.TRUSTED_PROXY_IPS == ("127.0.0.1",)
+PY
+
+expect_failure wrong-return-type "${valid_env}" "${wrong_type_release}"
 
 write_env "${env_dir}/app.env" development
 expect_failure app-env "${env_dir}/app.env" "${release}"
