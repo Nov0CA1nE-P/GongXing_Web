@@ -66,7 +66,7 @@ PY
 }
 
 write_env() {
-    local path="$1" app_env="${2:-production}" origin="${3:-https://test.novocaine.me}" \
+    local path="$1" app_env="${2:-production}" origin="${3:-https://gongxing.novocaine.me}" \
         proxy="${4:-127.0.0.1}" database="${5:-/var/lib/gongxing/data/site.db}" \
         password="${6:-valid-password-123}"
     cat >"${path}" <<EOF
@@ -109,7 +109,7 @@ GONGXING_DEPLOY_TEST_MODE=1 python3 "${validator}" --test-mode \
     --env-file "${valid_env}" --release-dir "${release}"
 
 APP_ENV=production \
-TRUSTED_ORIGINS=https://test.novocaine.me \
+TRUSTED_ORIGINS=https://gongxing.novocaine.me \
 CORS_ALLOWED_ORIGINS= \
 TRUSTED_PROXY_IPS=127.0.0.1 \
 DATABASE_PATH=/var/lib/gongxing/data/site.db \
@@ -119,7 +119,7 @@ python3 - <<'PY'
 import config
 
 assert type(config.TRUSTED_ORIGINS) is tuple
-assert config.TRUSTED_ORIGINS == ("https://test.novocaine.me",)
+assert config.TRUSTED_ORIGINS == ("https://gongxing.novocaine.me",)
 assert type(config.TRUSTED_PROXY_IPS) is tuple
 assert config.TRUSTED_PROXY_IPS == ("127.0.0.1",)
 PY
@@ -130,11 +130,11 @@ write_env "${env_dir}/app.env" development
 expect_failure app-env "${env_dir}/app.env" "${release}"
 write_env "${env_dir}/origin.env" production https://wrong.example
 expect_failure trusted-origin "${env_dir}/origin.env" "${release}"
-write_env "${env_dir}/proxy.env" production https://test.novocaine.me 10.0.0.1
+write_env "${env_dir}/proxy.env" production https://gongxing.novocaine.me 10.0.0.1
 expect_failure trusted-proxy "${env_dir}/proxy.env" "${release}"
-write_env "${env_dir}/data.env" production https://test.novocaine.me 127.0.0.1 /tmp/site.db
+write_env "${env_dir}/data.env" production https://gongxing.novocaine.me 127.0.0.1 /tmp/site.db
 expect_failure data-path "${env_dir}/data.env" "${release}"
-write_env "${env_dir}/password.env" production https://test.novocaine.me 127.0.0.1 /var/lib/gongxing/data/site.db short
+write_env "${env_dir}/password.env" production https://gongxing.novocaine.me 127.0.0.1 /var/lib/gongxing/data/site.db short
 expect_failure admin-password "${env_dir}/password.env" "${release}"
 
 cp "${valid_env}" "${env_dir}/mode.env"

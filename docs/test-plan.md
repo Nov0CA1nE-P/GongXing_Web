@@ -355,11 +355,13 @@
 
 部署完成后立即检查：
 
-- [ ] 未提供 Basic Auth 时首页、API、health 和 PDF 均不会公开
-- [ ] 逐用户 Basic Auth 可以单独撤销，认证头不会传给 FastAPI
+- [ ] `gongxing.novocaine.me` 未配置 Basic Auth，匿名用户可访问首页、静态资源和 SPA 路由
+- [ ] `test.novocaine.me` 仍要求 Basic Auth，认证头不会传给 FastAPI
+- [ ] 正式站 `/api/admin/session` 未登录返回 401，管理员写操作仍校验 Origin、Cookie 和 CSRF
+- [ ] `/opt/gongxing` 与 `/opt/gongxing/releases` 为 `root:gongxing 0751`；www-data 可读取公开静态文件但不能列目录、后端、环境文件或数据库
 - [ ] 未知 Host、直接 IP、8000 和 5173 均无法访问应用
 - [ ] Nginx 使用 `$uri` 日志且不记录查询字符串和认证信息
-- [ ] Bootstrap 未知 Host 和测试 Host 均显式关闭访问日志
+- [ ] 正式域名 Bootstrap 显式关闭访问日志，未知 Host 仍由测试站默认块拒绝
 - [ ] 最终 HTTP 未知 Host、HTTP 跳转和 HTTPS 未知 SNI 均关闭访问日志
 - [ ] HTTPS 应用入口使用 `$uri` 安全日志，不使用默认日志
 - [ ] HTTPS 返回短期 HSTS `max-age=86400`，不含 includeSubDomains/preload
@@ -450,7 +452,7 @@
 - [ ] 回环门禁覆盖整数/缩写 IPv4、完整/压缩 IPv6、IPv4-mapped IPv6，
       并检查主机名解析得到的全部 A/AAAA；解析失败时安全拒绝
 - [ ] 已用离线恢复凭据完成一次获批站外仓库的隔离恢复
-- [ ] 真实联系人数据和课件进入系统前，站外备份及恢复演练已获批并通过
+- [ ] 已记录公开 V1 在站外备份前的数据丢失风险；上线后尽快完成获批站外备份及恢复演练
 - [ ] Certbot timer 已启用，renew dry-run 与 deploy hook 分别真实验收
 - [ ] nginx 配置失败时证书 hook 不 reload，成功时才 reload；hook 为 root
       所有且普通用户不可写
