@@ -10,10 +10,8 @@ require_root
 acquire_ops_lock
 assert_no_recovery_holds
 
-: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
 : "${RESTIC_PASSWORD_FILE:?RESTIC_PASSWORD_FILE is required}"
-: "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}"
-: "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}"
+require_approved_offsite_repository
 
 readonly DATABASE_PATH="/var/lib/gongxing/data/site.db"
 readonly UPLOADS_DIR="/var/lib/gongxing/data/uploads"

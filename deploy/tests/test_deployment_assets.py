@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
@@ -153,50 +152,60 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("--workers 1", unit)
         self.assertIn("--forwarded-allow-ips 127.0.0.1", unit)
 
-    def test_deploy_release_modes_and_state_transitions(self):
-        harness = ROOT / "deploy/tests/deploy_release_harness.sh"
-        if os.name == "nt":
-            drive = harness.drive.rstrip(":").lower()
-            relative = harness.relative_to(harness.anchor).as_posix()
-            converted = f"/mnt/{drive}/{relative}"
-            command = ["wsl", "bash", converted]
-        else:
-            command = ["bash", str(harness)]
-        result = subprocess.run(
-            command,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=60,
-        )
-        self.assertEqual(
-            result.returncode,
-            0,
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
-        )
-        self.assertIn("deploy release behavior tests: ok", result.stdout)
+    def test_deployment_behavior_harnesses(self):
+        harnesses = {
+            "deploy_release_harness.sh": "deploy release behavior tests: ok",
+            "release_package_harness.sh": "release package behavior tests: ok",
+            "production_config_harness.sh": "production config behavior tests: ok",
+            "certbot_hook_harness.sh": "certbot hook behavior tests: ok",
+            "offsite_backup_harness.sh": "offsite backup behavior tests: ok",
+        }
+        for name, success_marker in harnesses.items():
+            with self.subTest(harness=name):
+                harness = ROOT / "deploy/tests" / name
+                if os.name == "nt":
+                    drive = harness.drive.rstrip(":").lower()
+                    relative = harness.relative_to(harness.anchor).as_posix()
+                    command = ["wsl", "bash", f"/mnt/{drive}/{relative}"]
+                else:
+                    command = ["bash", str(harness)]
+                result = subprocess.run(
+                    command,
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    timeout=90,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+                )
+                self.assertIn(success_marker, result.stdout)
 
-    def test_spaces_lifecycle_is_valid_and_bounded(self):
-        lifecycle = json.loads(self.read("deploy/spaces/lifecycle.json"))
-        rules = {rule["ID"]: rule for rule in lifecycle["Rules"]}
-        self.assertEqual(
-            rules["expire-noncurrent-versions-after-30-days"][
-                "NoncurrentVersionExpiration"
-            ]["NoncurrentDays"],
-            30,
-        )
-        self.assertEqual(
-            rules["abort-incomplete-multipart-after-1-day"][
-                "AbortIncompleteMultipartUpload"
-            ]["DaysAfterInitiation"],
-            1,
-        )
-        self.assertTrue(
-            rules["remove-expired-delete-markers"]["Expiration"][
-                "ExpiredObjectDeleteMarker"
-            ]
-        )
+    def test_release_install_is_offline_and_pre_switch_validated(self):
+        build = self.read("deploy/scripts/build-release.sh")
+        deploy = self.read("deploy/scripts/deploy-release.sh")
+        self.assertIn("--only-binary=:all:", build)
+        self.assertIn("--require-hashes", build)
+        self.assertIn("--no-index", deploy)
+        self.assertIn("release_integrity.py\" verify", deploy)
+        validator = deploy.index("validate-production-config.py")
+        switch = deploy.index('mv -- "${temporary_release}" "${release_dir}"')
+        self.assertLess(validator, switch)
+
+    def test_offsite_backup_requires_exact_approval_and_remote_repository(self):
+        common = self.read("deploy/scripts/common.sh")
+        self.assertIn('"${OFFSITE_BACKUP_APPROVED:-}" != "1"', common)
+        for forbidden in ("file:", "localhost", "127(?:", "::1"):
+            self.assertIn(forbidden, common)
+        self.assertFalse((ROOT / "deploy/scripts/configure-spaces.sh").exists())
+        self.assertFalse((ROOT / "deploy/spaces/lifecycle.json").exists())
+
+    def test_certbot_hook_validates_before_reload(self):
+        hook = self.read("deploy/scripts/certbot-reload-nginx.sh")
+        self.assertLess(hook.index("nginx -t"), hook.index("systemctl reload"))
 
     def test_ci_has_read_only_permissions_and_no_deployment(self):
         workflow = self.read(".github/workflows/ci.yml")

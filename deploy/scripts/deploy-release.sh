@@ -10,6 +10,7 @@ require_root
 shift
 
 artifact_dir=""
+artifact_manifest=""
 release_id=""
 confirmed_backup=""
 initial_deploy=0
@@ -21,6 +22,10 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         --release)
             release_id="${2:-}"
+            shift 2
+            ;;
+        --artifact-manifest)
+            artifact_manifest="${2:-}"
             shift 2
             ;;
         --confirmed-backup)
@@ -57,12 +62,19 @@ if [[ "${initial_deploy}" -eq 0 ]]; then
     fi
 fi
 artifact_dir="$(realpath -- "${artifact_dir}")"
+artifact_manifest="$(realpath -- "${artifact_manifest}")"
 if [[ ! -d "${artifact_dir}/backend" || ! -d "${artifact_dir}/frontend/dist" ]]; then
     echo "error: artifact is missing backend or frontend/dist" >&2
     exit 2
 fi
 if [[ ! -f "${artifact_dir}/backend/requirements.lock" ]]; then
     echo "error: artifact is missing backend/requirements.lock" >&2
+    exit 2
+fi
+if [[ ! -d "${artifact_dir}/wheelhouse" || \
+      ! -f "${artifact_dir}/WHEELHOUSE_SHA256SUMS" || \
+      ! -f "${artifact_manifest}" ]]; then
+    echo "error: artifact is missing its offline wheelhouse or integrity manifest" >&2
     exit 2
 fi
 if [[ -e "${artifact_dir}/data" || -e "${artifact_dir}/.env" ]]; then
@@ -76,15 +88,18 @@ assert_no_recovery_holds
 if [[ "${GONGXING_DEPLOY_TEST_MODE:-0}" == "1" ]]; then
     releases_root="${GONGXING_TEST_ROOT}/opt/gongxing/releases"
     current_link="${GONGXING_TEST_ROOT}/opt/gongxing/current"
+    environment_file="${GONGXING_TEST_ROOT}/etc/gongxing/gongxing.env"
 else
     releases_root="/opt/gongxing/releases"
     current_link="/opt/gongxing/current"
+    environment_file="/etc/gongxing/gongxing.env"
 fi
 release_dir="${releases_root}/${release_id}"
 temporary_release="${releases_root}/.${release_id}.new"
 previous_target=""
 was_active=0
 switched=0
+transaction_started=0
 
 if [[ "${initial_deploy}" -eq 1 ]]; then
     if [[ -e "${current_link}" || -L "${current_link}" ]]; then
@@ -145,6 +160,14 @@ cleanup() {
 
     trap - EXIT INT TERM HUP
     set +e
+
+    # 预检查失败发生在维护和服务切换之前，不得影响现有服务或 current。
+    if [[ "${transaction_started}" -eq 0 ]]; then
+        if [[ -d "${temporary_release}" ]]; then
+            rm -rf -- "${temporary_release}"
+        fi
+        exit "${final_exit}"
+    fi
 
     # 第一阶段：主流程成功后，再确认新 release 达到最终服务状态。
     if [[ "${final_exit}" -eq 0 ]]; then
@@ -273,27 +296,36 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-if service_is_active; then
-    was_active=1
+# 所有耗时和可失败的发布预检查都在旧服务仍正常运行时完成。
+integrity_owner_args=()
+if [[ "${GONGXING_DEPLOY_TEST_MODE:-0}" != "1" ]]; then
+    integrity_owner_args+=(--require-root-owner)
 fi
-if [[ -L "${current_link}" ]]; then
-    previous_target="$(readlink -f -- "${current_link}")"
-fi
-
-enable_maintenance
-if [[ "${was_active}" -eq 1 ]]; then
-    systemctl stop "${GONGXING_SERVICE}"
-fi
-
+python3.12 "${SCRIPT_DIR}/release_integrity.py" verify \
+    --directory "${artifact_dir}" \
+    --manifest "${artifact_manifest}" \
+    --release "${release_id}" \
+    "${integrity_owner_args[@]}"
 install -d -m 0750 "${temporary_release}"
 cp -a -- "${artifact_dir}/." "${temporary_release}/"
+python3.12 "${SCRIPT_DIR}/release_integrity.py" verify \
+    --directory "${temporary_release}" \
+    --manifest "${artifact_manifest}" \
+    --release "${release_id}" \
+    "${integrity_owner_args[@]}"
 ln -s "${DATA_DIR}" "${temporary_release}/data"
 printf '%s\n' "${release_id}" >"${temporary_release}/RELEASE_GIT_SHA"
 
 python3.12 -m venv "${temporary_release}/.venv"
 "${temporary_release}/.venv/bin/python" -m pip install \
+    --no-index \
+    --find-links "${temporary_release}/wheelhouse" \
     --require-hashes \
     --requirement "${temporary_release}/backend/requirements.lock"
+"${temporary_release}/.venv/bin/python" \
+    "${SCRIPT_DIR}/validate-production-config.py" \
+    --env-file "${environment_file}" \
+    --release-dir "${temporary_release}"
 
 if [[ "${GONGXING_DEPLOY_TEST_MODE:-0}" != "1" ]]; then
     chown -R root:gongxing "${temporary_release}"
@@ -304,6 +336,18 @@ find "${temporary_release}/.venv/bin" -type f -exec chmod 0750 {} +
 chmod 0755 "${temporary_release}"
 find "${temporary_release}/frontend" -type d -exec chmod 0755 {} +
 find "${temporary_release}/frontend" -type f -exec chmod 0644 {} +
+
+if service_is_active; then
+    was_active=1
+fi
+if [[ -L "${current_link}" ]]; then
+    previous_target="$(readlink -f -- "${current_link}")"
+fi
+transaction_started=1
+enable_maintenance
+if [[ "${was_active}" -eq 1 ]]; then
+    systemctl stop "${GONGXING_SERVICE}"
+fi
 mv -- "${temporary_release}" "${release_dir}"
 
 ln -s "${release_dir}" "${current_link}.next"

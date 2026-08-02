@@ -61,8 +61,27 @@ fi
 )
 
 validation_root="$(mktemp -d)"
+wheelhouse="${validation_root}/wheelhouse"
+mkdir -p "${wheelhouse}"
+python3 -m pip download \
+    --require-hashes \
+    --only-binary=:all: \
+    --requirement "${repo_root}/backend/requirements.lock" \
+    --dest "${wheelhouse}"
+if find "${wheelhouse}" -maxdepth 1 -type f ! -name '*.whl' -print -quit | grep -q . || \
+   [[ -z "$(find "${wheelhouse}" -maxdepth 1 -type f -name '*.whl' -print -quit)" ]]; then
+    echo "error: wheelhouse must contain wheels only" >&2
+    exit 1
+fi
+(
+    cd "${wheelhouse}"
+    sha256sum -- *.whl | LC_ALL=C sort -k2 \
+        >"${validation_root}/WHEELHOUSE_SHA256SUMS"
+)
 python3 -m venv "${validation_root}/venv"
 "${validation_root}/venv/bin/python" -m pip install \
+    --no-index \
+    --find-links "${wheelhouse}" \
     --require-hashes \
     --requirement "${repo_root}/backend/requirements.lock"
 (
@@ -72,13 +91,13 @@ python3 -m venv "${validation_root}/venv"
     "${validation_root}/venv/bin/python" -m unittest discover \
         -s backend/tests -p 'test_*.py'
 )
-rm -rf -- "${validation_root}"
-validation_root=""
-
 mkdir -p "${output_dir}"
 git -C "${repo_root}" archive "${release_id}" | tar -x -C "${output_dir}"
 rm -rf -- "${output_dir}/data"
 cp -a -- "${repo_root}/frontend/dist" "${output_dir}/frontend/dist"
+cp -a -- "${wheelhouse}" "${output_dir}/wheelhouse"
+cp -- "${validation_root}/WHEELHOUSE_SHA256SUMS" \
+    "${output_dir}/WHEELHOUSE_SHA256SUMS"
 
 if find "${output_dir}" \
     \( -name .env -o -name '*.htpasswd' -o -name '*.db' -o -name '*.pdf' \) \
@@ -94,5 +113,9 @@ npm_version=$(npm --version)
 python_version=$(python3 --version)
 requirements_lock_sha256=$(sha256sum "${repo_root}/backend/requirements.lock" | cut -d' ' -f1)
 package_lock_sha256=$(sha256sum "${repo_root}/frontend/package-lock.json" | cut -d' ' -f1)
+wheelhouse_sha256s_sha256=$(sha256sum "${output_dir}/WHEELHOUSE_SHA256SUMS" | cut -d' ' -f1)
 built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
+
+rm -rf -- "${validation_root}"
+validation_root=""

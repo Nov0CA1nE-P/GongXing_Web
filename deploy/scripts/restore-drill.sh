@@ -9,10 +9,8 @@ require_server_confirmation "${1:-}"
 require_root
 snapshot_id="${2:-latest}"
 
-: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
 : "${RESTIC_PASSWORD_FILE:?RESTIC_PASSWORD_FILE is required}"
-: "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}"
-: "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}"
+require_approved_offsite_repository
 
 acquire_ops_lock
 assert_no_recovery_holds
