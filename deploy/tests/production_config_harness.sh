@@ -14,9 +14,10 @@ make_release() {
     mkdir -p "${target}/backend"
     ln -s /var/lib/gongxing/data "${target}/data"
     cat >"${target}/backend/dotenv.py" <<'PY'
-def dotenv_values(path):
+def dotenv_values(path=None, stream=None):
     values = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    source = stream.read() if stream is not None else path.read_text(encoding="utf-8")
+    for line in source.splitlines():
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
             values[key] = value
@@ -92,19 +93,58 @@ cp "${valid_env}" "${test_root}/mode.env"
 chmod 0664 "${test_root}/mode.env"
 expect_failure env-mode "${test_root}/mode.env" "${release}"
 
-python3 - "${validator}" "${valid_env}" <<'PY'
+ln -s "${valid_env}" "${test_root}/linked.env"
+expect_failure env-symlink "${test_root}/linked.env" "${release}"
+ln -s "${test_root}/missing.env" "${test_root}/dangling.env"
+expect_failure dangling-env-symlink "${test_root}/dangling.env" "${release}"
+
+mkdir -m 0700 "${test_root}/real-parent"
+write_env "${test_root}/real-parent/parent.env"
+ln -s "${test_root}/real-parent" "${test_root}/linked-parent"
+expect_failure parent-symlink "${test_root}/linked-parent/parent.env" "${release}"
+
+python3 - "${validator}" "${valid_env}" "${test_root}" <<'PY'
 import importlib.util
 import os
+import shutil
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("validator", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 try:
-    module.validate_metadata(Path(sys.argv[2]), os.getuid() + 1, os.getgid())
+    stream = module.open_verified_environment(Path(sys.argv[2]), os.getuid() + 1, os.getgid())
 except RuntimeError:
-    raise SystemExit(0)
+    pass
+else:
+    stream.close()
+    raise SystemExit(1)
+
+race_parent = Path(sys.argv[3]) / "race-parent"
+race_parent.mkdir(mode=0o700)
+race_env = race_parent / "race.env"
+shutil.copyfile(sys.argv[2], race_env)
+race_env.chmod(0o600)
+old_parent = race_parent.with_name("race-parent-old")
+original_open = os.open
+replaced = False
+def replacing_open(path, flags, *args, **kwargs):
+    global replaced
+    if flags & os.O_DIRECTORY and not replaced:
+        race_parent.rename(old_parent)
+        race_parent.mkdir(mode=0o700)
+        shutil.copyfile(old_parent / "race.env", race_parent / "race.env")
+        (race_parent / "race.env").chmod(0o600)
+        replaced = True
+    return original_open(path, flags, *args, **kwargs)
+
+with patch.object(module.os, "open", replacing_open):
+    try:
+        module.open_verified_environment(race_env, os.getuid(), os.getgid())
+    except RuntimeError:
+        raise SystemExit(0)
 raise SystemExit(1)
 PY
 

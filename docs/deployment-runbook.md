@@ -104,6 +104,10 @@ HTTP-01 续期需要长期保留 80 的 ACME challenge 入口，其余 HTTP 可�
 启用并验证 Certbot timer，然后执行：
 
 ```bash
+sudo install -o root -g root -m 0755 deploy/scripts/certbot-reload-nginx.sh \
+  /etc/letsencrypt/renewal-hooks/deploy/certbot-reload-nginx.sh
+sudo python3 deploy/scripts/verify-certbot-hook.py \
+  --hook /etc/letsencrypt/renewal-hooks/deploy/certbot-reload-nginx.sh
 sudo certbot renew --dry-run --run-deploy-hooks
 sudo /etc/letsencrypt/renewal-hooks/deploy/certbot-reload-nginx.sh
 ```

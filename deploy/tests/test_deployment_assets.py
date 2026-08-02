@@ -198,14 +198,34 @@ class DeploymentAssetTests(unittest.TestCase):
     def test_offsite_backup_requires_exact_approval_and_remote_repository(self):
         common = self.read("deploy/scripts/common.sh")
         self.assertIn('"${OFFSITE_BACKUP_APPROVED:-}" != "1"', common)
-        for forbidden in ("file:", "localhost", "127(?:", "::1"):
-            self.assertIn(forbidden, common)
+        parser = self.read("deploy/scripts/validate_restic_repository.py")
+        self.assertIn("socket.getaddrinfo", parser)
+        self.assertIn("ipv4_mapped", parser)
+        self.assertIn("address.is_loopback", parser)
         self.assertFalse((ROOT / "deploy/scripts/configure-spaces.sh").exists())
         self.assertFalse((ROOT / "deploy/spaces/lifecycle.json").exists())
 
     def test_certbot_hook_validates_before_reload(self):
         hook = self.read("deploy/scripts/certbot-reload-nginx.sh")
         self.assertLess(hook.index("nginx -t"), hook.index("systemctl reload"))
+        installer = self.read("docs/deployment-runbook.md")
+        self.assertIn("install -o root -g root -m 0755", installer)
+        verifier = self.read("deploy/scripts/verify-certbot-hook.py")
+        self.assertIn("lstat()", verifier)
+        self.assertIn("0o022", verifier)
+
+    def test_release_archive_budgets_are_fixed(self):
+        verifier = self.read("deploy/scripts/verify_release_archive.py")
+        for value in (
+            "MAX_ARCHIVE_BYTES = 64 * MIB",
+            "MAX_MEMBER_COUNT = 4096",
+            "MAX_MEMBER_DECLARED_BYTES = 32 * MIB",
+            "MAX_TOTAL_DECLARED_BYTES = 256 * MIB",
+            "MAX_COMPRESSION_RATIO = 40",
+            "MAX_ACTUAL_WRITTEN_BYTES = 256 * MIB",
+        ):
+            self.assertIn(value, verifier)
+        self.assertNotIn("extractall", verifier)
 
     def test_ci_has_read_only_permissions_and_no_deployment(self):
         workflow = self.read(".github/workflows/ci.yml")

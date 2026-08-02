@@ -29,7 +29,7 @@ if find "${release_dir}" -type l -o \! -type d -a \! -type f | grep -q .; then
     exit 1
 fi
 if find "${release_dir}" -type f \( \
-    -name .env -o -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' -o \
+    -name '.env*' -o -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' -o \
     -name '*.pdf' -o -name '*.htpasswd' -o -name '*.pem' -o -name '*.key' -o \
     -name restic-password -o -name id_rsa -o -name id_ed25519 \
 \) -print -quit | grep -q . || [[ -e "${release_dir}/data" || -L "${release_dir}/data" ]]; then

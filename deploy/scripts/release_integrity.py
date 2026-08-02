@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import unicodedata
 from pathlib import Path, PurePosixPath
 
 
@@ -39,7 +40,7 @@ def file_sha256(path: Path) -> str:
 
 
 def safe_relative_path(relative: Path) -> str:
-    value = relative.as_posix()
+    value = unicodedata.normalize("NFC", relative.as_posix())
     pure = PurePosixPath(value)
     if pure.is_absolute() or not pure.parts or any(part in {"", ".", ".."} for part in pure.parts):
         raise RuntimeError("release contains an unsafe path")
@@ -50,12 +51,18 @@ def safe_relative_path(relative: Path) -> str:
 
 def assert_allowed_path(relative: str) -> None:
     parts = PurePosixPath(relative).parts
-    lowered = [part.lower() for part in parts]
+    lowered = [unicodedata.normalize("NFC", part).casefold() for part in parts]
     if lowered[0] == "data":
         raise RuntimeError("release contains a persistent data directory")
     for part in lowered:
+        if part == ".env" or part.startswith(".env."):
+            raise RuntimeError("release contains an environment file")
         if part in FORBIDDEN_EXACT or part.endswith(FORBIDDEN_SUFFIXES):
             raise RuntimeError("release contains a forbidden file")
+    if "wheelhouse" in lowered and (
+        lowered[0] != "wheelhouse" or parts[0] != "wheelhouse"
+    ):
+        raise RuntimeError("wheelhouse is only allowed at the prescribed root path")
 
 
 def scan_directory(root: Path, require_root_owner: bool) -> list[dict[str, object]]:
@@ -69,8 +76,13 @@ def scan_directory(root: Path, require_root_owner: bool) -> list[dict[str, objec
         raise RuntimeError("release root must not be writable by group or others")
 
     entries: list[dict[str, object]] = []
+    collision_keys: set[str] = set()
     for path in sorted(resolved.rglob("*"), key=lambda item: item.relative_to(resolved).as_posix()):
         relative = safe_relative_path(path.relative_to(resolved))
+        collision_key = relative.casefold()
+        if collision_key in collision_keys:
+            raise RuntimeError("release contains normalized-colliding paths")
+        collision_keys.add(collision_key)
         assert_allowed_path(relative)
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):

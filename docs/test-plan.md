@@ -386,6 +386,15 @@
 - [ ] 单一归档与归档外 SHA-256 同时传输，摘要和 Git SHA 均匹配
 - [ ] 篡改归档、错误摘要、错误 Git SHA、路径穿越、符号链接、源码包和
       data/.env/数据库/PDF/秘密文件均被拒绝
+- [ ] 归档固定预算覆盖 64 MiB 压缩文件、4096 成员、32 MiB 单成员、
+      256 MiB 总声明/实际写入和 40:1 压缩比；高压缩比、超大成员/总量、
+      超多成员及声明/实际写入不符均失败且不残留临时输出
+- [ ] Unicode NFC/casefold 等价路径、反斜杠、重复成员、文件/目录前缀冲突、
+      `.env.production` 和非规定位置 wheelhouse 均被拒绝
+- [ ] manifest 字段完整且唯一，Git SHA、requirements lock、package lock 和
+      wheel 清单摘要均按实际文件验证
+- [ ] wheelhouse 与哈希锁定安装计划严格一致，额外/缺失/重复 wheel、sdist、
+      无关文件和摘要不符均被拒绝
 - [ ] 验证后新增、删除或修改发布目录内容会在部署复制前被二次校验拒绝
 - [ ] 服务器离线安装 wheel，不访问公共 Python 源且不编译源码依赖
 - [ ] production 配置检查在切换 current、维护和停止旧服务之前完成
@@ -422,11 +431,15 @@
 - [ ] 普通 HTTP 健康失败只记录和告警，不自动重启
 - [ ] `OFFSITE_BACKUP_APPROVED` 仅接受精确值 `1`，本地/相对/file/回环
       restic 仓库被拒绝
+- [ ] 回环门禁覆盖整数/缩写 IPv4、完整/压缩 IPv6、IPv4-mapped IPv6，
+      并检查主机名解析得到的全部 A/AAAA；解析失败时安全拒绝
 - [ ] 已用离线恢复凭据完成一次获批站外仓库的隔离恢复
 - [ ] 真实联系人数据和课件进入系统前，站外备份及恢复演练已获批并通过
 - [ ] Certbot timer 已启用，renew dry-run 与 deploy hook 分别真实验收
 - [ ] nginx 配置失败时证书 hook 不 reload，成功时才 reload；hook 为 root
       所有且普通用户不可写
+- [ ] Certbot hook 及父目录通过 lstat/stat 验收，symlink、错误属主、组写或
+      其他用户写权限均被拒绝
 - [ ] 已核对阿里云实例到期时间、自动续费和账户费用提醒
 
 ## 16. 问题等级

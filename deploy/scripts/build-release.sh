@@ -94,13 +94,15 @@ python3 -m venv "${validation_root}/venv"
 mkdir -p "${output_dir}"
 git -C "${repo_root}" archive "${release_id}" | tar -x -C "${output_dir}"
 rm -rf -- "${output_dir}/data"
+# Environment templates belong in Git documentation, never in a transported release.
+find "${output_dir}" -type f -name '.env*' -delete
 cp -a -- "${repo_root}/frontend/dist" "${output_dir}/frontend/dist"
 cp -a -- "${wheelhouse}" "${output_dir}/wheelhouse"
 cp -- "${validation_root}/WHEELHOUSE_SHA256SUMS" \
     "${output_dir}/WHEELHOUSE_SHA256SUMS"
 
 if find "${output_dir}" \
-    \( -name .env -o -name '*.htpasswd' -o -name '*.db' -o -name '*.pdf' \) \
+    \( -name '.env*' -o -name '*.htpasswd' -o -name '*.db' -o -name '*.pdf' \) \
     -print -quit | grep -q .; then
     echo "error: release artifact contains forbidden data" >&2
     exit 1

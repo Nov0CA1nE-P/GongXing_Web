@@ -93,25 +93,6 @@ require_approved_offsite_repository() {
         exit 78
     fi
     : "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
-    python3 - "${RESTIC_REPOSITORY}" <<'PY'
-import re
-import sys
-
-repository = sys.argv[1]
-lowered = repository.lower()
-if repository != repository.strip() or not repository:
-    raise SystemExit("error: restic repository is malformed")
-if repository.startswith(("/", "./", "../", "~", "\\")):
-    raise SystemExit("error: local restic repositories are forbidden")
-if re.match(r"^[a-zA-Z]:[\\/]", repository):
-    raise SystemExit("error: local restic repositories are forbidden")
-if ":" not in repository or lowered.startswith(("file:", "local:")):
-    raise SystemExit("error: an approved remote restic repository is required")
-if re.search(r"(^|[^a-z0-9])localhost([^a-z0-9]|$)", lowered):
-    raise SystemExit("error: loopback restic repositories are forbidden")
-if re.search(r"(^|[^0-9])127(?:\.[0-9]{1,3}){3}([^0-9]|$)", lowered):
-    raise SystemExit("error: loopback restic repositories are forbidden")
-if "::1" in lowered:
-    raise SystemExit("error: loopback restic repositories are forbidden")
-PY
+    python3 "$(dirname "${BASH_SOURCE[0]}")/validate_restic_repository.py" \
+        "${RESTIC_REPOSITORY}"
 }
