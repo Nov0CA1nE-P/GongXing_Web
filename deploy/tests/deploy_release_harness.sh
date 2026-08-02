@@ -43,6 +43,8 @@ new_case() {
     chmod 0640 "${root}/etc/gongxing/gongxing.env"
     printf 'stopped\n' >"${root}/service-state"
     printf '0\n' >"${root}/start-count"
+    printf '0\n' >"${root}/health-count"
+    printf '0\n' >"${root}/sleep-count"
     : >"${root}/start-targets"
     printf '0\n' >"${root}/maintenance-delete-attempts"
 
@@ -76,12 +78,30 @@ EOF
     cat >"${fake_bin}/curl" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+count="$(( $(cat "${TEST_HEALTH_COUNT}") + 1 ))"
+printf '%s\n' "${count}" >"${TEST_HEALTH_COUNT}"
 if [[ "${TEST_HEALTH_FAIL:-0}" == "1" ]]; then
+    exit 1
+fi
+if [[ -n "${TEST_SERVICE_EXIT_ON_HEALTH_ATTEMPT:-}" && \
+    "${count}" == "${TEST_SERVICE_EXIT_ON_HEALTH_ATTEMPT}" ]]; then
+    printf 'stopped\n' >"${TEST_SERVICE_STATE}"
+    exit 1
+fi
+if [[ -n "${TEST_HEALTH_SUCCEED_ON:-}" && \
+    "${count}" -lt "${TEST_HEALTH_SUCCEED_ON}" ]]; then
     exit 1
 fi
 if [[ "${TEST_EXIT_AFTER_HEALTH:-0}" == "1" ]]; then
     printf 'stopped\n' >"${TEST_SERVICE_STATE}"
 fi
+EOF
+
+    cat >"${fake_bin}/sleep" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+count="$(( $(cat "${TEST_SLEEP_COUNT}") + 1 ))"
+printf '%s\n' "${count}" >"${TEST_SLEEP_COUNT}"
 EOF
 
     cat >"${fake_bin}/logger" <<'EOF'
@@ -93,6 +113,10 @@ EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
 for argument in "$@"; do
+    if [[ "${TEST_RELEASE_DELETE_FAIL:-0}" == "1" && \
+        "${argument}" == "${TEST_FAILED_RELEASE}" ]]; then
+        exit 1
+    fi
     if [[ "${argument}" == "${TEST_MAINTENANCE_FILE}" ]]; then
         attempts="$(( $(cat "${TEST_MAINTENANCE_DELETE_ATTEMPTS}") + 1 ))"
         printf '%s\n' "${attempts}" >"${TEST_MAINTENANCE_DELETE_ATTEMPTS}"
@@ -135,6 +159,7 @@ else
 fi
 EOF
     chmod 0750 "${fake_bin}/systemctl" "${fake_bin}/curl" \
+        "${fake_bin}/sleep" \
         "${fake_bin}/logger" "${fake_bin}/rm" "${fake_bin}/python3.12"
     printf '%s\n' "${root}"
 }
@@ -178,13 +203,19 @@ run_deploy() {
         GONGXING_DEPLOY_TEST_MODE=1 \
         GONGXING_DEPLOY_TEST_ROOT="${root}" \
         TEST_SERVICE_STATE="${root}/service-state" \
+        TEST_HEALTH_COUNT="${root}/health-count" \
+        TEST_SLEEP_COUNT="${root}/sleep-count" \
         TEST_START_COUNT="${root}/start-count" \
         TEST_START_TARGETS="${root}/start-targets" \
         TEST_CURRENT_LINK="${root}/opt/gongxing/current" \
         TEST_HEALTH_FAIL="${TEST_HEALTH_FAIL:-0}" \
+        TEST_HEALTH_SUCCEED_ON="${TEST_HEALTH_SUCCEED_ON:-}" \
+        TEST_SERVICE_EXIT_ON_HEALTH_ATTEMPT="${TEST_SERVICE_EXIT_ON_HEALTH_ATTEMPT:-}" \
         TEST_EXIT_AFTER_HEALTH="${TEST_EXIT_AFTER_HEALTH:-0}" \
         TEST_START_FAIL_ON="${TEST_START_FAIL_ON:-}" \
         TEST_MAINTENANCE_DELETE_FAIL="${TEST_MAINTENANCE_DELETE_FAIL:-0}" \
+        TEST_RELEASE_DELETE_FAIL="${TEST_RELEASE_DELETE_FAIL:-0}" \
+        TEST_FAILED_RELEASE="${root}/opt/gongxing/releases/${release}" \
         TEST_CONFIG_VALIDATION_FAILURE="${TEST_CONFIG_VALIDATION_FAILURE:-}" \
         TEST_MAINTENANCE_FILE="${root}/run/gongxing/maintenance" \
         TEST_MAINTENANCE_DELETE_ATTEMPTS="${root}/maintenance-delete-attempts" \
@@ -210,9 +241,31 @@ test_initial_success() {
         "initial deployment current target"
     assert_eq "running" "$(cat "${root}/service-state")" \
         "initial deployment service state"
+    assert_exists "${root}/opt/gongxing/releases/${release}"
     assert_absent "${root}/run/gongxing/maintenance"
     assert_eq "1" "$(cat "${root}/maintenance-delete-attempts")" \
         "initial success did not clear maintenance exactly once"
+}
+
+test_initial_delayed_health_success() {
+    local root artifact release current
+    root="$(new_case initial-delayed-health-success)"
+    artifact="$(make_artifact "${root}" release)"
+    release="1212121212121212121212121212121212121212"
+    current="${root}/opt/gongxing/current"
+
+    TEST_HEALTH_SUCCEED_ON=3 run_deploy "${root}" \
+        --initial-deploy --artifact "${artifact}" --release "${release}"
+
+    assert_eq "3" "$(cat "${root}/health-count")" \
+        "delayed readiness health request count"
+    assert_eq "2" "$(cat "${root}/sleep-count")" \
+        "delayed readiness retry interval count"
+    assert_exists "${current}"
+    assert_exists "${root}/opt/gongxing/releases/${release}"
+    assert_eq "running" "$(cat "${root}/service-state")" \
+        "delayed readiness service state"
+    assert_absent "${root}/run/gongxing/maintenance"
 }
 
 test_initial_failure() {
@@ -230,6 +283,51 @@ test_initial_failure() {
     assert_absent "${current}"
     assert_eq "stopped" "$(cat "${root}/service-state")" \
         "failed initial deployment service state"
+    assert_exists "${root}/run/gongxing/maintenance"
+    assert_absent "${root}/opt/gongxing/releases/${release}"
+    assert_eq "15" "$(cat "${root}/health-count")" \
+        "health timeout request count"
+}
+
+test_initial_service_exit_during_health_wait() {
+    local root artifact release current
+    root="$(new_case initial-service-exit-during-health-wait)"
+    artifact="$(make_artifact "${root}" release)"
+    release="2323232323232323232323232323232323232323"
+    current="${root}/opt/gongxing/current"
+
+    if TEST_HEALTH_SUCCEED_ON=99 TEST_SERVICE_EXIT_ON_HEALTH_ATTEMPT=2 \
+        run_deploy "${root}" --initial-deploy \
+        --artifact "${artifact}" --release "${release}"; then
+        fail "initial deployment waited after the service exited"
+    fi
+
+    assert_eq "2" "$(cat "${root}/health-count")" \
+        "service exit was not detected before another health request"
+    assert_eq "1" "$(cat "${root}/sleep-count")" \
+        "service exit triggered an extra retry sleep"
+    assert_absent "${current}"
+    assert_absent "${root}/opt/gongxing/releases/${release}"
+    assert_eq "stopped" "$(cat "${root}/service-state")" \
+        "service exit failure changed stopped state"
+    assert_exists "${root}/run/gongxing/maintenance"
+}
+
+test_initial_failed_release_cleanup_failure() {
+    local root artifact release
+    root="$(new_case initial-failed-release-cleanup-failure)"
+    artifact="$(make_artifact "${root}" release)"
+    release="3434343434343434343434343434343434343434"
+
+    if TEST_HEALTH_FAIL=1 TEST_RELEASE_DELETE_FAIL=1 run_deploy "${root}" \
+        --initial-deploy --artifact "${artifact}" --release "${release}"; then
+        fail "initial deployment ignored failed release cleanup"
+    fi
+
+    assert_absent "${root}/opt/gongxing/current"
+    assert_exists "${root}/opt/gongxing/releases/${release}"
+    assert_eq "stopped" "$(cat "${root}/service-state")" \
+        "cleanup failure changed stopped state"
     assert_exists "${root}/run/gongxing/maintenance"
 }
 
@@ -249,6 +347,7 @@ test_initial_final_liveness_failure() {
     assert_eq "stopped" "$(cat "${root}/service-state")" \
         "final liveness failure did not stop the initial service"
     assert_exists "${root}/run/gongxing/maintenance"
+    assert_absent "${root}/opt/gongxing/releases/${release}"
 }
 
 test_initial_maintenance_clear_failure() {
@@ -267,6 +366,7 @@ test_initial_maintenance_clear_failure() {
     assert_eq "stopped" "$(cat "${root}/service-state")" \
         "maintenance clear failure did not stop the initial service"
     assert_exists "${root}/run/gongxing/maintenance"
+    assert_absent "${root}/opt/gongxing/releases/${release}"
     assert_eq "1" "$(cat "${root}/maintenance-delete-attempts")" \
         "initial failure retried maintenance clear after rollback"
 }
@@ -436,6 +536,8 @@ test_subsequent_success() {
         "subsequent deployment current target"
     assert_eq "running" "$(cat "${root}/service-state")" \
         "subsequent deployment did not restore service state"
+    assert_exists "${root}/opt/gongxing/releases/${old_release}"
+    assert_exists "${root}/opt/gongxing/releases/${new_release}"
     assert_absent "${root}/run/gongxing/maintenance"
     assert_eq "1" "$(cat "${root}/maintenance-delete-attempts")" \
         "subsequent success did not clear maintenance exactly once"
@@ -460,6 +562,8 @@ test_subsequent_stopped_state() {
         "stopped subsequent deployment current target"
     assert_eq "stopped" "$(cat "${root}/service-state")" \
         "subsequent deployment changed an originally stopped service"
+    assert_exists "${root}/opt/gongxing/releases/${old_release}"
+    assert_exists "${root}/opt/gongxing/releases/${new_release}"
     assert_absent "${root}/run/gongxing/maintenance"
 }
 
@@ -484,6 +588,8 @@ test_subsequent_failure_rolls_back() {
     assert_eq "running" "$(cat "${root}/service-state")" \
         "failed subsequent deployment did not restore service state"
     assert_exists "${root}/run/gongxing/maintenance"
+    assert_exists "${root}/opt/gongxing/releases/${old_release}"
+    assert_absent "${root}/opt/gongxing/releases/${new_release}"
 }
 
 test_subsequent_final_restore_failure_rolls_back() {
@@ -507,6 +613,8 @@ test_subsequent_final_restore_failure_rolls_back() {
     assert_eq "running" "$(cat "${root}/service-state")" \
         "old release was not restarted after final restore failure"
     assert_exists "${root}/run/gongxing/maintenance"
+    assert_exists "${root}/opt/gongxing/releases/${old_release}"
+    assert_absent "${root}/opt/gongxing/releases/${new_release}"
     assert_eq "3" "$(cat "${root}/start-count")" \
         "final restore failure did not make three distinct start attempts"
     second_target="$(sed -n '2p' "${root}/start-targets")"
@@ -542,6 +650,8 @@ test_subsequent_maintenance_clear_failure_rolls_back() {
     assert_eq "running" "$(cat "${root}/service-state")" \
         "old release was not restarted after maintenance clear failure"
     assert_exists "${root}/run/gongxing/maintenance"
+    assert_exists "${root}/opt/gongxing/releases/${old_release}"
+    assert_absent "${root}/opt/gongxing/releases/${new_release}"
     assert_eq "3" "$(cat "${root}/start-count")" \
         "maintenance clear rollback did not restart the old release"
     assert_eq "1" "$(cat "${root}/maintenance-delete-attempts")" \
@@ -549,7 +659,10 @@ test_subsequent_maintenance_clear_failure_rolls_back() {
 }
 
 test_initial_success
+test_initial_delayed_health_success
 test_initial_failure
+test_initial_service_exit_during_health_wait
+test_initial_failed_release_cleanup_failure
 test_initial_final_liveness_failure
 test_initial_maintenance_clear_failure
 test_initial_config_validation_failure
