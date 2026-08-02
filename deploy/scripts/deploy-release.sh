@@ -5,6 +5,38 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
 
+readonly HEALTH_WAIT_BUDGET_SECONDS=30
+readonly HEALTH_CONNECT_TIMEOUT_SECONDS=1
+readonly HEALTH_REQUEST_TIMEOUT_SECONDS=1
+readonly HEALTH_RETRY_INTERVAL_SECONDS=1
+readonly HEALTH_MAX_ATTEMPTS=$((
+    HEALTH_WAIT_BUDGET_SECONDS /
+    (HEALTH_REQUEST_TIMEOUT_SECONDS + HEALTH_RETRY_INTERVAL_SECONDS)
+))
+
+wait_for_application_health() {
+    local attempt
+    for ((attempt = 1; attempt <= HEALTH_MAX_ATTEMPTS; attempt++)); do
+        if ! service_is_active; then
+            logger -p user.err -t gongxing-deploy \
+                "application service exited before becoming healthy"
+            return 1
+        fi
+        if curl --silent --show-error --fail \
+            --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
+            --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
+            http://127.0.0.1:8000/api/health >/dev/null; then
+            return 0
+        fi
+        if [[ "${attempt}" -lt "${HEALTH_MAX_ATTEMPTS}" ]]; then
+            sleep "${HEALTH_RETRY_INTERVAL_SECONDS}"
+        fi
+    done
+    logger -p user.err -t gongxing-deploy \
+        "application health did not become ready within the fixed wait budget"
+    return 1
+}
+
 require_server_confirmation "${1:-}"
 require_root
 shift
@@ -100,6 +132,59 @@ previous_target=""
 was_active=0
 switched=0
 transaction_started=0
+
+cleanup_failed_release() {
+    local current_target=""
+    local failed_release_real=""
+    local releases_root_real=""
+
+    if [[ "${release_dir}" != "${releases_root}/${release_id}" ]]; then
+        logger -p user.err -t gongxing-deploy \
+            "refusing to clean a failed release with an unexpected path"
+        return 1
+    fi
+    if [[ ! -d "${releases_root}" || -L "${releases_root}" ]]; then
+        logger -p user.err -t gongxing-deploy \
+            "refusing to clean a failed release below an unsafe root"
+        return 1
+    fi
+    if [[ ! -e "${release_dir}" && ! -L "${release_dir}" ]]; then
+        return 0
+    fi
+    if [[ ! -d "${release_dir}" || -L "${release_dir}" ]]; then
+        logger -p user.err -t gongxing-deploy \
+            "refusing to clean a failed release that is not a directory"
+        return 1
+    fi
+
+    releases_root_real="$(realpath -e -- "${releases_root}")" || return 1
+    failed_release_real="$(realpath -e -- "${release_dir}")" || return 1
+    if [[ "$(dirname -- "${failed_release_real}")" != "${releases_root_real}" ]]; then
+        logger -p user.err -t gongxing-deploy \
+            "refusing to clean a failed release outside the releases root"
+        return 1
+    fi
+    if [[ -L "${current_link}" ]]; then
+        current_target="$(readlink -f -- "${current_link}" 2>/dev/null || true)"
+    fi
+    if [[ -n "${current_target}" && "${failed_release_real}" == "${current_target}" ]]; then
+        logger -p user.err -t gongxing-deploy \
+            "refusing to clean the release selected by current"
+        return 1
+    fi
+    if [[ -n "${previous_target}" && "${failed_release_real}" == "${previous_target}" ]]; then
+        logger -p user.err -t gongxing-deploy \
+            "refusing to clean the previous release"
+        return 1
+    fi
+
+    rm -rf -- "${release_dir}"
+    if [[ -e "${release_dir}" || -L "${release_dir}" ]]; then
+        logger -p user.err -t gongxing-deploy \
+            "failed release cleanup did not complete"
+        return 1
+    fi
+}
 
 if [[ "${initial_deploy}" -eq 1 ]]; then
     if [[ -e "${current_link}" || -L "${current_link}" ]]; then
@@ -277,6 +362,10 @@ cleanup() {
                     "pre-deploy stopped state could not be restored after rollback"
             fi
         fi
+        if ! cleanup_failed_release; then
+            logger -p user.err -t gongxing-deploy \
+                "failed release cleanup requires manual review"
+        fi
         logger -p user.warning -t gongxing-deploy \
             "deployment failed; maintenance mode remains enabled"
     else
@@ -355,8 +444,7 @@ mv -Tf "${current_link}.next" "${current_link}"
 switched=1
 
 systemctl start "${GONGXING_SERVICE}"
-curl --silent --show-error --fail --max-time 10 \
-    http://127.0.0.1:8000/api/health >/dev/null
+wait_for_application_health
 if [[ "${initial_deploy}" -eq 0 ]]; then
     systemctl stop "${GONGXING_SERVICE}"
 fi

@@ -195,6 +195,29 @@ class DeploymentAssetTests(unittest.TestCase):
         switch = deploy.index('mv -- "${temporary_release}" "${release_dir}"')
         self.assertLess(validator, switch)
 
+    def test_deployment_health_wait_and_failed_release_cleanup_are_bounded(self):
+        deploy = self.read("deploy/scripts/deploy-release.sh")
+        for value in (
+            "HEALTH_WAIT_BUDGET_SECONDS=30",
+            "HEALTH_CONNECT_TIMEOUT_SECONDS=1",
+            "HEALTH_REQUEST_TIMEOUT_SECONDS=1",
+            "HEALTH_RETRY_INTERVAL_SECONDS=1",
+            "wait_for_application_health",
+            '--connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}"',
+            '--max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}"',
+            "if ! service_is_active; then",
+            "cleanup_failed_release",
+            '"${release_dir}" != "${releases_root}/${release_id}"',
+            '"${failed_release_real}" == "${current_target}"',
+            '"${failed_release_real}" == "${previous_target}"',
+        ):
+            self.assertIn(value, deploy)
+        wait_body = deploy[
+            deploy.index("wait_for_application_health()"):
+            deploy.index("require_server_confirmation")
+        ]
+        self.assertNotRegex(wait_body, r"systemctl\s+(?:start|restart)")
+
     def test_production_environment_layout_is_exact(self):
         runbook = self.read("docs/deployment-runbook.md")
         validator = self.read("deploy/scripts/validate-production-config.py")

@@ -95,7 +95,15 @@ sudo deploy/scripts/deploy-release.sh \
 venv、用 `--no-index --find-links --require-hashes` 安装 wheel、使用临时 venv
 执行 `validate-production-config.py`，然后才进入维护、停止旧服务、切换
 `current`、启动和健康检查。配置/权限校验失败发生在切换前，不能影响旧服务。
-切换后的失败进入统一回滚；只有服务状态和维护文件解除均成功才返回 0。
+启动后使用同一套有界就绪等待：固定预算 30 秒，最多请求 15 次；每次健康请求
+连接超时和总请求超时均为 1 秒，失败后按固定 1 秒间隔重试，并在每次请求前
+确认 `gongxing.service` 仍为 active。只接受 `/api/health` 的成功 HTTP 响应；
+服务提前退出立即失败，达到期限仍未就绪也失败，脚本不会自动重启服务。
+
+切换后的失败进入统一回滚；只有服务状态和维护文件解除均成功才返回 0。回滚
+完成后仅清理本次 `release_id` 对应、位于固定 releases 根目录、且既不是
+`current` 目标也不是旧 `previous_target` 的失败 release。历史有效 release、
+持久数据和环境配置不参与清理；清理失败仍返回非零并保留维护状态。
 
 ## 4. 公网入口、DNS 与 HTTPS（单独授权后）
 
