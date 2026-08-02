@@ -39,18 +39,20 @@ class DeploymentAssetTests(unittest.TestCase):
 
     def test_bootstrap_does_not_expose_the_application(self):
         config = self.read("deploy/nginx/gongxing-bootstrap.conf")
-        self.assertIn("test.novocaine.me", config)
+        self.assertIn("gongxing.novocaine.me", config)
         self.assertIn("/.well-known/acme-challenge/", config)
         self.assertNotIn("proxy_pass", config)
         self.assertNotIn("frontend/dist", config)
         self.assertRegex(config, r"return (?:404|503)")
         blocks = self.nginx_server_blocks(config)
-        self.assertEqual(len(blocks), 2)
+        self.assertEqual(len(blocks), 1)
         for block in blocks:
             self.assertRegex(block, r"(?m)^\s*access_log\s+off;")
 
     def test_final_nginx_security_contract(self):
-        config = self.read("deploy/nginx/gongxing-test.conf")
+        test_config = self.read("deploy/nginx/gongxing-test.conf")
+        public_config = self.read("deploy/nginx/gongxing-public.conf")
+        global_config = self.read("deploy/nginx/conf.d/gongxing-global.conf")
         headers = self.read(
             "deploy/nginx/snippets/gongxing-security-headers.conf"
         )
@@ -66,7 +68,21 @@ class DeploymentAssetTests(unittest.TestCase):
             "try_files $uri $uri/ /index.html",
         ]
         for value in required:
-            self.assertIn(value, config)
+            self.assertIn(value, test_config)
+        self.assertIn("server_name gongxing.novocaine.me", public_config)
+        self.assertNotIn("auth_basic", public_config)
+        self.assertIn("auth_basic", test_config)
+        self.assertIn("User-agent: *\\nDisallow: /", public_config)
+        for value in (
+            "client_max_body_size 52m",
+            "gzip_vary on",
+            "location = /api",
+            "location /api/",
+            "location = /data",
+            "location /data/",
+            "try_files $uri $uri/ /index.html",
+        ):
+            self.assertIn(value, public_config)
         for value in (
             "X-Robots-Tag",
             "X-Content-Type-Options",
@@ -82,14 +98,14 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertNotIn("preload", lowered_headers)
         log_format = re.search(
             r"log_format gongxing_safe(?P<body>.*?);",
-            config,
+            global_config,
             re.DOTALL,
         )
         self.assertIsNotNone(log_format)
         self.assertIsNone(
             re.search(r"\$(request|request_uri)\b", log_format.group("body"))
         )
-        blocks = self.nginx_server_blocks(config)
+        blocks = self.nginx_server_blocks(test_config)
         self.assertEqual(len(blocks), 4)
         application_blocks = [
             block
@@ -105,6 +121,32 @@ class DeploymentAssetTests(unittest.TestCase):
         for block in blocks:
             if block not in application_blocks:
                 self.assertRegex(block, r"(?m)^\s*access_log\s+off;")
+
+        public_blocks = self.nginx_server_blocks(public_config)
+        self.assertEqual(len(public_blocks), 2)
+        self.assertTrue(all("gongxing.novocaine.me" in block for block in public_blocks))
+        self.assertRegex(
+            public_blocks[1],
+            r"(?m)^\s*access_log\s+\S+\s+gongxing_safe;",
+        )
+
+    def test_public_site_keeps_application_admin_authentication(self):
+        public_config = self.read("deploy/nginx/gongxing-public.conf")
+        admin_routes = self.read("backend/routes/admin.py")
+        auth = self.read("backend/auth.py")
+        self.assertIn("try_files $uri $uri/ /index.html", public_config)
+        self.assertNotIn("auth_basic", public_config)
+        self.assertIn("Depends(require_admin)", admin_routes)
+        self.assertIn("require_trusted_source", admin_routes)
+        self.assertIn("require_csrf_token", admin_routes)
+        self.assertIn("def require_admin(", auth)
+
+    def test_static_path_parents_are_traversable_but_not_listable(self):
+        deploy = self.read("deploy/scripts/deploy-release.sh")
+        self.assertIn('application_root="/opt/gongxing"', deploy)
+        self.assertIn('releases_root="/opt/gongxing/releases"', deploy)
+        self.assertIn('install -d -m 0751 -o root -g gongxing', deploy)
+        self.assertNotIn("usermod", deploy)
 
     def test_proxy_headers_are_overwritten(self):
         config = self.read("deploy/nginx/snippets/gongxing-proxy.conf")
@@ -219,6 +261,17 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertEqual(wait_body.count("if ! service_is_active; then"), 2)
         self.assertNotRegex(wait_body, r"systemctl\s+(?:start|restart)")
 
+    def test_no_backup_release_requires_explicit_risk_acceptance(self):
+        deploy = self.read("deploy/scripts/deploy-release.sh")
+        harness = self.read("deploy/tests/deploy_release_harness.sh")
+        self.assertIn("--accept-no-backup-data-loss-risk", deploy)
+        self.assertIn(
+            "backup confirmation and no-backup override are mutually exclusive",
+            deploy,
+        )
+        self.assertIn("test_subsequent_requires_backup", harness)
+        self.assertIn("test_subsequent_explicit_no_backup_risk_acceptance", harness)
+
     def test_production_environment_layout_is_exact(self):
         runbook = self.read("docs/deployment-runbook.md")
         validator = self.read("deploy/scripts/validate-production-config.py")
@@ -238,7 +291,7 @@ class DeploymentAssetTests(unittest.TestCase):
         validator = self.read("deploy/scripts/validate-production-config.py")
         harness = self.read("deploy/tests/production_config_harness.sh")
         self.assertIn(
-            'config.TRUSTED_ORIGINS != ("https://test.novocaine.me",)',
+            'config.TRUSTED_ORIGINS != ("https://gongxing.novocaine.me",)',
             validator,
         )
         self.assertIn(

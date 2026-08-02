@@ -51,6 +51,7 @@ artifact_manifest=""
 release_id=""
 confirmed_backup=""
 initial_deploy=0
+accepted_no_backup_risk=0
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --artifact)
@@ -73,6 +74,10 @@ while [[ "$#" -gt 0 ]]; do
             initial_deploy=1
             shift
             ;;
+        --accept-no-backup-data-loss-risk)
+            accepted_no_backup_risk=1
+            shift
+            ;;
         *)
             echo "error: unknown argument: $1" >&2
             exit 2
@@ -84,16 +89,22 @@ if [[ ! "${release_id}" =~ ^[0-9a-f]{7,40}$ ]]; then
     echo "error: --release must be a Git commit ID" >&2
     exit 2
 fi
-if [[ "${initial_deploy}" -eq 1 && -n "${confirmed_backup}" ]]; then
-    echo "error: --initial-deploy and --confirmed-backup are mutually exclusive" >&2
+if [[ "${initial_deploy}" -eq 1 && \
+      ( -n "${confirmed_backup}" || "${accepted_no_backup_risk}" -eq 1 ) ]]; then
+    echo "error: initial deployment cannot use a backup or no-backup override" >&2
     exit 2
 fi
 if [[ "${initial_deploy}" -eq 0 ]]; then
-    if [[ -z "${confirmed_backup}" ]]; then
-        echo "error: subsequent deployments require --confirmed-backup" >&2
+    if [[ -n "${confirmed_backup}" && "${accepted_no_backup_risk}" -eq 1 ]]; then
+        echo "error: backup confirmation and no-backup override are mutually exclusive" >&2
         exit 2
     fi
-    if [[ ! "${confirmed_backup}" =~ ^[0-9a-f]{8,64}$ ]]; then
+    if [[ -z "${confirmed_backup}" && "${accepted_no_backup_risk}" -eq 0 ]]; then
+        echo "error: subsequent deployments require a backup or explicit data-loss risk acceptance" >&2
+        exit 2
+    fi
+    if [[ -n "${confirmed_backup}" && \
+          ! "${confirmed_backup}" =~ ^[0-9a-f]{8,64}$ ]]; then
         echo "error: --confirmed-backup must be a verified restic snapshot ID" >&2
         exit 2
     fi
@@ -123,10 +134,12 @@ acquire_ops_lock
 assert_no_recovery_holds
 
 if [[ "${GONGXING_DEPLOY_TEST_MODE:-0}" == "1" ]]; then
+    application_root="${GONGXING_TEST_ROOT}/opt/gongxing"
     releases_root="${GONGXING_TEST_ROOT}/opt/gongxing/releases"
     current_link="${GONGXING_TEST_ROOT}/opt/gongxing/current"
     environment_file="${GONGXING_TEST_ROOT}/etc/gongxing/gongxing.env"
 else
+    application_root="/opt/gongxing"
     releases_root="/opt/gongxing/releases"
     current_link="/opt/gongxing/current"
     environment_file="/etc/gongxing/gongxing.env"
@@ -232,9 +245,10 @@ if [[ "${initial_deploy}" -eq 1 ]]; then
 fi
 
 if [[ "${GONGXING_DEPLOY_TEST_MODE:-0}" == "1" ]]; then
-    install -d -m 0750 "${releases_root}"
+    install -d -m 0751 "${application_root}" "${releases_root}"
 else
-    install -d -m 0750 -o root -g gongxing "${releases_root}"
+    install -d -m 0751 -o root -g gongxing \
+        "${application_root}" "${releases_root}"
 fi
 if [[ -e "${release_dir}" || -L "${release_dir}" ]]; then
     echo "error: release already exists" >&2
@@ -377,6 +391,9 @@ cleanup() {
         if [[ "${initial_deploy}" -eq 1 ]]; then
             logger -t gongxing-deploy \
                 "initial release ${release_id} installed without pre-existing data"
+        elif [[ "${accepted_no_backup_risk}" -eq 1 ]]; then
+            logger -p user.warning -t gongxing-deploy \
+                "release ${release_id} installed with explicit data-loss risk acceptance"
         else
             logger -t gongxing-deploy \
                 "release ${release_id} installed after a confirmed backup"

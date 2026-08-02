@@ -76,7 +76,7 @@ def main() -> int:
 
     if config.APP_ENV != "production":
         raise RuntimeError("APP_ENV is not production")
-    if config.TRUSTED_ORIGINS != ("https://test.novocaine.me",):
+    if config.TRUSTED_ORIGINS != ("https://gongxing.novocaine.me",):
         raise RuntimeError("trusted origins do not match the restricted site")
     if config.CORS_ALLOWED_ORIGINS:
         raise RuntimeError("same-origin production must not enable CORS")

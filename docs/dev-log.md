@@ -686,3 +686,34 @@
   `git diff --check` 与敏感/意外文件检查通过。
 - 本轮不连接或修改服务器、DNS 和云资源；`f274b1c` 的旧 incoming 发布包不得
   继续部署。修复合并后必须从新的 `main` 准确 SHA 重新构建、打包和验证。
+
+## 2026-08-02：正式公开域名与双站点部署资产
+
+### 修改内容
+
+- 新增不使用 HTTP Basic Auth 的 `gongxing.novocaine.me` 正式站配置；保留
+  `test.novocaine.me` 及其既有 Basic Auth，不自动跳转或删除测试域名。
+- 将两个站点共用的安全日志格式和限流区移到独立 Nginx `conf.d` 文件，正式站
+  继续保留 noindex、robots Disallow、安全响应头、未知 Host 拒绝、反向代理头、
+  管理员会话认证、Origin、CSRF、Cookie 和应用限流契约。
+- production 唯一可信 Origin、环境模板、证书路径、HTTP 跳转、Certbot 流程和
+  部署文档改为正式域名；真实地址和秘密仍不进入仓库。
+- 发布脚本将 `/opt/gongxing` 与 `/opt/gongxing/releases` 固化为
+  `root:gongxing 0751`，只为 Nginx 静态文件读取提供父目录穿越权限，不递归
+  放宽 release、backend、data、`/etc/gongxing` 或环境文件，也不调整 www-data
+  的组成员关系。
+- 负责人接受公开 V1 在站外备份完成前上线的临时数据丢失风险；备份与恢复演练
+  改为上线后的独立工作，不删除既有备份安全门禁。
+
+### 验证
+
+- 部署资产与行为测试 20 项通过，包含五组真实 harness；覆盖正式站无 Basic
+  Auth、测试站仍有 Basic Auth、应用管理员认证保留、production Origin 和
+  两级 `0751` 权限，以及无备份发布必须显式接受数据丢失风险的门禁。
+- WSL Linux x86_64 CPython 3.12.13 隔离环境中后端 92 项通过；一次性依赖环境
+  随后删除。前端 build/lint 通过，Vite 构建 199 个模块，保留既有 503.54 kB
+  主包提示；本机 Node 24.9.0 低于锁定的 24.18.0，准确运行时由 CI 和合并后的
+  可信发布构建再次验证。
+- 全部部署 shell 通过 `bash -n`，部署与后端 Python 通过语法编译，
+  `git diff --check` 通过。真实 Nginx、TLS、DNS、服务重启和浏览器冒烟属于
+  合并后的目标机验收。

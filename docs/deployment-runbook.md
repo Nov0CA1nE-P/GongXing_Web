@@ -1,6 +1,7 @@
-# 阿里云香港受限测试部署运行手册
+# 阿里云香港公开 V1 部署运行手册
 
-本手册用于 `test.novocaine.me`。所有 `<SERVER_IP>`、`<PRIVATE_IP>`、
+本手册以 `gongxing.novocaine.me` 为正式公开域名，并保留受 Basic Auth 保护的
+`test.novocaine.me`。所有 `<SERVER_IP>`、`<PRIVATE_IP>`、
 `<ADMIN_HOME_IP>` 和凭据均为运行时占位符，禁止把真实值提交到仓库。
 
 ## 0. 强制门禁
@@ -9,7 +10,8 @@
   当时取得负责人授权；不自动扩大云资源。
 - 保持 `gongxing-admin`、root 远程登录禁用、密码/交互认证禁用、现有 UFW、
   阿里云 cloud-init 23.2.2-8 apt hold 和 hotplug FIFO 0600 drop-in。
-- 80/443 当前关闭；8000、5173 和数据库端口永不对公网开放。
+- 80/443 仅按已批准的正式/测试 Nginx 入口开放；8000、5173 和数据库端口永不
+  对公网开放。
 - production `.env`、htpasswd、私钥、管理员密码、DeepSeek Key 和备份凭据
   只由负责人在服务器或密码管理器填写，不进入终端回显、Git、聊天或日志。
 
@@ -63,7 +65,7 @@ sudo install -o root -g gongxing -m 0640 \
 
 ```dotenv
 APP_ENV=production
-TRUSTED_ORIGINS=https://test.novocaine.me
+TRUSTED_ORIGINS=https://gongxing.novocaine.me
 CORS_ALLOWED_ORIGINS=
 TRUSTED_PROXY_IPS=127.0.0.1
 DATABASE_PATH=/var/lib/gongxing/data/site.db
@@ -72,7 +74,7 @@ DEEPSEEK_API_KEY=
 ```
 
 `/var/lib/gongxing/data` 保存 SQLite 与上传，`/var/log/gongxing` 保存应用日志；
-目录由应用组按最小权限访问。DeepSeek Key 在受限测试可留空。
+目录由应用组按最小权限访问。DeepSeek Key 未启用相关能力时可留空。
 
 ## 3. 发布事务
 
@@ -91,6 +93,11 @@ sudo deploy/scripts/deploy-release.sh \
 `--confirmed-backup <VERIFIED_SNAPSHOT_ID>`。部署、备份、恢复共享
 `/run/lock/gongxing-ops.lock`，发现 `.recover-*.hold` 即停止。
 
+公开 V1 在站外备份完成前发布时，只有负责人明确接受新增数据不可恢复风险后，
+才可把 `--confirmed-backup` 替换为 `--accept-no-backup-data-loss-risk`。该开关与
+快照参数互斥，且每次发布都必须显式传入；省略两者仍会安全失败。完成站外备份
+与恢复演练后恢复使用快照 ID，不把风险开关作为常规发布方式。
+
 锁内顺序固定为：复核已验证目录、复制到临时 release、再次复核、离线创建
 venv、用 `--no-index --find-links --require-hashes` 安装 wheel、使用临时 venv
 执行 `validate-production-config.py`，然后才进入维护、停止旧服务、切换
@@ -105,20 +112,28 @@ venv、用 `--no-index --find-links --require-hashes` 安装 wheel、使用临�
 `current` 目标也不是旧 `previous_target` 的失败 release。历史有效 release、
 持久数据和环境配置不参与清理；清理失败仍返回非零并保留维护状态。
 
-## 4. 公网入口、DNS 与 HTTPS（单独授权后）
+## 4. 正式公网入口、DNS 与 HTTPS（单独授权后）
 
-1. 先生成逐用户 `/etc/nginx/gongxing.htpasswd`，设为 root 所有且不可被普通
-   用户写入；安装未知 Host 拒绝和 `gongxing-bootstrap.conf`。bootstrap 的
-   80 只允许 `/.well-known/acme-challenge/`，其他请求 404/维护，不代理应用。
-2. 经授权在轻量防火墙和 UFW 开放 80/443。此时 443 尚无站点，应用没有
-   无认证公开窗口。
-3. 在现有 Namecheap DNS 添加 `test.novocaine.me -> <SERVER_IP>`；不迁移
-   Nameserver。验证权威 DNS 与外部解析后签发证书。
-4. 安装最终 Nginx 配置前检查其中已含全站 Basic Auth、noindex、未知
-   Host/SNI 拒绝、`/api` 与 `/data` 禁止 SPA 回退、52m 传输上限和安全代理头。
-   `nginx -t` 成功才 reload，第一次启用 443 时认证必须已经生效。
+1. 把 `deploy/nginx/conf.d/gongxing-global.conf` 安装为
+   `/etc/nginx/conf.d/gongxing-global.conf`，属主 `root:root`、权限 `0644`。保留
+   现有测试站配置及 `/etc/nginx/gongxing.htpasswd`，测试站不得取消 Basic Auth。
+2. 安装 `gongxing-bootstrap.conf` 作为正式域名临时 HTTP 站点。它只允许
+   `/.well-known/acme-challenge/`，其他请求返回 503，不代理应用；未知 Host
+   继续由测试站的默认拒绝块处理。
+3. 在现有 Namecheap DNS 添加 `gongxing.novocaine.me -> <SERVER_IP>`；不迁移
+   Nameserver、不添加 AAAA，也不修改 `test` 记录。验证权威 DNS 与外部解析后
+   用 webroot 为正式域名单独签发证书。
+4. 安装 `gongxing-public.conf` 到 `/etc/nginx/sites-available/gongxing-public`，
+   检查正式站没有 `auth_basic`，测试站仍引用 htpasswd。两个站点均保留 noindex、
+   未知 Host/SNI 拒绝、`/api` 与 `/data` 禁止 SPA 回退、52m 上限和安全代理头。
+   `nginx -t` 成功后才启用并 reload。
 5. FastAPI 仍只监听回环。用伪造 `Forwarded`/`X-Forwarded-*` 验证 Nginx 覆盖
    输入，并验证 Secure Cookie、CSRF、限流与真实客户端 IP 契约。
+
+发布脚本必须保持 `/opt/gongxing` 与 `/opt/gongxing/releases` 为
+`root:gongxing 0751`，使 Nginx 的 `www-data` 仅能穿过父目录读取公开静态文件，
+但不能列出父目录。不得递归放宽具体 release、backend、`/etc/gongxing` 或
+`/var/lib/gongxing/data`，也不得把 `www-data` 加入 `gongxing` 组。
 
 HTTP-01 续期需要长期保留 80 的 ACME challenge 入口，其余 HTTP 可跳转或拒绝。
 启用并验证 Certbot timer，然后执行：
@@ -136,11 +151,12 @@ hook 必须为 root 所有、普通用户不可写；它必须先 `nginx -t`，�
 成功才 reload。证书私钥权限保持 Certbot 默认安全边界，不进入 Git、发布包或
 应用备份。
 
-## 5. 站外备份（当前未授权）
+## 5. 站外备份（公开 V1 上线后补齐）
 
-当前没有 OSS 或其他站外仓库，`gongxing-backup.timer` 不得启用。真实联系人
-数据或课件上传前，负责人需要单独批准远程加密仓库、地域、费用、密钥保管、
-保留策略和删除流程。服务器同盘目录不是站外备份。
+当前没有 OSS 或其他站外仓库，`gongxing-backup.timer` 不得启用。负责人已接受
+公开 V1 在站外备份前上线的临时风险：服务器故障或误删可能导致新增数据无法
+恢复。站外备份和恢复演练不阻塞本次发布，但必须作为上线后的独立工作完成；
+服务器同盘目录不算站外备份。
 
 批准后配置 `OFFSITE_BACKUP_APPROVED=1` 与远程 restic repository；脚本拒绝
 其他批准值、相对/本地路径、`file:`、localhost 和回环地址。备份期间 Nginx
@@ -156,9 +172,8 @@ SQLite integrity check 和测试 PDF 校验后才允许真实数据。
 并尝试恢复旧服务，命令仍返回失败等待人工确认；原服务停止则保持停止。
 
 服务器重启后验证 gongxing/Nginx/Certbot timer 的期望启用状态、UFW、时间同步、
-无失败 unit，以及 Basic Auth、`/api/health` 和静态资源。线上只使用测试 PDF、
-临时账号和虚构数据冒烟；清理临时数据并确认备份恢复后，才按审批顺序上传
-真实课件。
+无失败 unit、正式站匿名访问、测试站 Basic Auth、`/api/health` 和静态资源。
+公开 V1 上线后仍应尽快完成站外备份；在此之前新增数据按已接受风险运行。
 
 ## 7. Git 与服务器专属文件
 

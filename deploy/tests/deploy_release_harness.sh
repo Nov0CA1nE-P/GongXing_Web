@@ -242,6 +242,10 @@ test_initial_success() {
     assert_eq "running" "$(cat "${root}/service-state")" \
         "initial deployment service state"
     assert_exists "${root}/opt/gongxing/releases/${release}"
+    assert_eq "751" "$(stat -c %a "${root}/opt/gongxing")" \
+        "application root traversal mode"
+    assert_eq "751" "$(stat -c %a "${root}/opt/gongxing/releases")" \
+        "releases root traversal mode"
     assert_absent "${root}/run/gongxing/maintenance"
     assert_eq "1" "$(cat "${root}/maintenance-delete-attempts")" \
         "initial success did not clear maintenance exactly once"
@@ -543,6 +547,29 @@ test_subsequent_success() {
         "subsequent success did not clear maintenance exactly once"
 }
 
+test_subsequent_explicit_no_backup_risk_acceptance() {
+    local root artifact old_release new_release current
+    old_release="1357913579135791357913579135791357913579"
+    new_release="9753197531975319753197531975319753197531"
+    root="$(prepare_subsequent_case subsequent-no-backup-risk "${old_release}")"
+    artifact="$(make_artifact "${root}" release)"
+    current="${root}/opt/gongxing/current"
+
+    run_deploy "${root}" \
+        --accept-no-backup-data-loss-risk \
+        --artifact "${artifact}" --release "${new_release}"
+
+    assert_eq \
+        "${root}/opt/gongxing/releases/${new_release}" \
+        "$(readlink -f -- "${current}")" \
+        "explicit no-backup deployment current target"
+    assert_eq "running" "$(cat "${root}/service-state")" \
+        "explicit no-backup deployment service state"
+    assert_exists "${root}/opt/gongxing/releases/${old_release}"
+    assert_exists "${root}/opt/gongxing/releases/${new_release}"
+    assert_absent "${root}/run/gongxing/maintenance"
+}
+
 test_subsequent_stopped_state() {
     local root artifact old_release new_release current
     old_release="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -671,6 +698,7 @@ test_initial_persistent_data_guards
 test_subsequent_requires_backup
 test_subsequent_config_failures_preserve_old_release
 test_subsequent_success
+test_subsequent_explicit_no_backup_risk_acceptance
 test_subsequent_stopped_state
 test_subsequent_failure_rolls_back
 test_subsequent_final_restore_failure_rolls_back
