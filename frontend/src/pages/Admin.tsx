@@ -11,16 +11,21 @@ import {
   isAdminCoursewareList,
   type AdminCoursewareItem,
 } from '../types/courseware'
+import {
+  COURSEWARE_FILE_ACCEPT,
+  COURSEWARE_FILE_ERROR,
+  isValidCoursewareFile,
+} from '../config/coursewareFile'
 
 type Tab = 'pending' | 'pending_follow_ups' | 'allqa' | 'messages' | 'contacts' | 'upload'
 type AuthState = 'checking' | 'anonymous' | 'authenticated'
 
 function getCoursewareFile(item: AdminCoursewareItem) {
-  const fileName = item.pdf_path || item.pptx_path || ''
-  const extension = fileName.split('.').pop()?.toUpperCase() || ''
+  const fileName = item.file_path || item.pdf_path || item.pptx_path || ''
+  const extension = (item.file_type || fileName.split('.').pop() || '').toUpperCase()
   return {
     fileName,
-    fileType: ['PDF', 'PPT', 'PPTX'].includes(extension)
+    fileType: ['PDF', 'PPT', 'PPTX', 'DOCX', 'JPG'].includes(extension)
       ? extension
       : '课件文件',
   }
@@ -409,11 +414,8 @@ function Admin() {
 
   const upload = async () => {
     if (!cwTitle || !cwFile || cwUploading) return
-    if (
-      !cwFile.name.toLowerCase().endsWith('.pdf')
-      || cwFile.type !== 'application/pdf'
-    ) {
-      setCwMsg('V1 运营入口只接受浏览器识别为 PDF 的 .pdf 文件')
+    if (!isValidCoursewareFile(cwFile)) {
+      setCwMsg(COURSEWARE_FILE_ERROR)
       return
     }
     setCwUploading(true)
@@ -669,18 +671,12 @@ function Admin() {
                 <input value={cwTags} onChange={e => setCwTags(e.target.value)} placeholder="标签，用逗号分隔（如：机械,材料）" />
               </div>
               <div className="form-group">
-                <input type="file" accept=".pdf,application/pdf" ref={fileRef}
+                <input type="file" accept={COURSEWARE_FILE_ACCEPT} ref={fileRef}
                   onChange={e => {
                     const file = e.target.files?.[0] || null
-                    if (
-                      file
-                      && (
-                        !file.name.toLowerCase().endsWith('.pdf')
-                        || file.type !== 'application/pdf'
-                      )
-                    ) {
+                    if (file && !isValidCoursewareFile(file)) {
                       setCwFile(null)
-                      setCwMsg('V1 运营入口只接受浏览器识别为 PDF 的 .pdf 文件')
+                      setCwMsg(COURSEWARE_FILE_ERROR)
                       e.currentTarget.value = ''
                       return
                     }

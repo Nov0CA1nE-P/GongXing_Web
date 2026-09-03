@@ -10,6 +10,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test:courseware": "node --experimental-strip-types scripts/test-courseware-file.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

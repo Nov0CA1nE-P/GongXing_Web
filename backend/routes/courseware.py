@@ -25,6 +25,8 @@ from file_storage import (
     MULTIPART_OVERHEAD_BYTES,
     UnsafeStoredPath,
     resolve_upload_path,
+    courseware_file_reference,
+    public_courseware_reference,
     serialize_courseware_row,
     serialize_public_courseware_row,
     store_validated_upload,
@@ -36,7 +38,7 @@ LOGGER = logging.getLogger(__name__)
 
 @router.get("/list")
 def list_courseware(tag: str = ""):
-    """获取可公开PDF列表。可选按 tag 筛选。"""
+    """获取可公开课件列表。可选按 tag 筛选。"""
     conn = get_db()
     try:
         if tag:
@@ -75,7 +77,7 @@ def admin_list_courseware(
 
 @router.get("/{courseware_id}")
 def get_courseware(courseware_id: int):
-    """获取单个可公开PDF详情。"""
+    """获取单个可公开课件详情。"""
     conn = get_db()
     try:
         row = conn.execute(
@@ -130,8 +132,9 @@ async def upload_courseware(
             temp_dir=COURSEWARE_TEMP_DIR,
             max_bytes=COURSEWARE_MAX_UPLOAD_BYTES,
         )
-        pdf_path = final_name if final_name.endswith(".pdf") else ""
-        pptx_path = final_name if not pdf_path else ""
+        extension = Path(final_name).suffix.lower()
+        pdf_path = final_name if extension == ".pdf" else ""
+        pptx_path = final_name if extension in {".ppt", ".pptx"} else ""
 
         internal_date = date.strip() or datetime.now(timezone.utc).strftime(
             "%Y-%m-%d"
@@ -139,8 +142,8 @@ async def upload_courseware(
         conn = get_db()
         cursor = conn.execute(
             "INSERT INTO courseware "
-            "(title, date, description, tags, pdf_path, pptx_path) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(title, date, description, tags, pdf_path, pptx_path, file_path, file_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 title,
                 internal_date,
@@ -148,6 +151,8 @@ async def upload_courseware(
                 tags,
                 pdf_path,
                 pptx_path,
+                final_name,
+                extension.lstrip("."),
             ),
         )
         conn.commit()
@@ -194,7 +199,11 @@ def delete_courseware(
             raise HTTPException(status_code=404, detail="课件不存在")
 
         paths: list[Path] = []
-        for stored_value in {row["pdf_path"], row["pptx_path"]}:
+        stored_values = [row["file_path"]] if "file_path" in row.keys() and row["file_path"] else []
+        stored_values.extend(
+            value for value in (row["pdf_path"], row["pptx_path"]) if value
+        )
+        for stored_value in dict.fromkeys(stored_values):
             if not stored_value:
                 continue
             try:

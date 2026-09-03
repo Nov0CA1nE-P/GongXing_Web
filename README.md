@@ -9,7 +9,8 @@ V1 活动信息：
 - 主办：北京科技大学
 - 协办：浙江省杭州学军中学
 
-V1 公开课件仅提供 PDF。高考分数页、选科建议、院校排名和团队成员卡片暂不公开。
+V1 公开课件支持 PDF、PPTX、DOCX 和 JPG。PDF/JPG 可在线查看并下载，PPTX/DOCX 仅下载。
+高考分数页、选科建议、院校排名和团队成员卡片暂不公开。
 
 ## 项目结构
 
@@ -91,19 +92,21 @@ npm run lint
 GET /data/uploads/{filename}
 ```
 
-公开文件接口只响应与数据库记录关联、位于 `data/uploads/` 内且不是符号链接的安全 PDF。PPT、PPTX、孤立文件和目录外文件统一返回 404。因此 `/data/site.db`、临时文件和其他内部数据不会通过 HTTP 提供。
+公开文件接口只响应与数据库记录关联、位于 `data/uploads/` 内且不是符号链接的安全 PDF、PPTX、DOCX 或 JPG。旧版 PPT、孤立文件和目录外文件统一返回 404。因此 `/data/site.db`、临时文件和其他内部数据不会通过 HTTP 提供。
 
-后端继续保留 PPT/PPTX 的安全识别、存储兼容和安全删除能力，管理员可以在历史课件列表中查看并删除这些记录；V1 不提供 PPT/PPTX 公共下载或管理员下载入口。
+后端继续保留 PPT/PPTX 的安全识别、存储兼容和安全删除能力，管理员可以在历史课件列表中查看并删除这些记录；旧版 PPT 不新增到前端上传入口，也不提供公共下载。
 
 后端上传时仍会同时检查扩展名、声明的 MIME 和文件内容：
 
 - PDF 检查 `%PDF-` 文件头。
 - PPT 使用 `olefile` 检查 OLE 容器和 `PowerPoint Document` 数据流。
 - PPTX 检查 ZIP、必要的 OOXML 文件和类型声明；ZIP 最多 2048 个条目，声明的总解压大小不超过 250 MiB，`[Content_Types].xml` 不超过 1 MiB，`ppt/presentation.xml` 不超过 8 MiB。校验不会完整解压 PPTX。
+- DOCX 检查 ZIP、`[Content_Types].xml`、`word/document.xml` 和 WordprocessingML 类型声明，复用相同条目/解压/XML 上限，并拒绝危险路径、重复条目和异常压缩比。
+- JPG 检查 SOI、合法 JPEG 段、有效图像帧和 EOI，不只相信扩展名或浏览器 MIME。
 
-磁盘文件名由服务端随机生成，标题、内部日期和用户文件名不会参与路径。管理员 V1 上传界面只接受 PDF，也不要求填写日期；旧客户端仍可选传日期，省略时由服务器写入 UTC 日期。列表统一按 `created_at DESC, id DESC` 排序。
+磁盘文件名由服务端随机生成，标题、内部日期和用户文件名不会参与路径。管理员 V1 上传界面只接受 PDF、PPTX、DOCX、JPG，也不要求填写日期；旧客户端仍可选传日期，省略时由服务器写入 UTC 日期。列表统一按 `created_at DESC, id DESC` 排序。
 
-公开课件列表、详情、首页统计和文件下载共用同一“可公开 PDF”判定，公开接口不返回内部日期或 PPT/PPTX 路径。
+公开课件列表、详情、首页统计和文件下载共用同一“可公开文件”判定，公开接口不返回内部日期或原始绝对路径。文件接口对 PDF/JPG 使用 `inline`，对 PPTX/DOCX 使用 `attachment`，并设置 `X-Content-Type-Options: nosniff`。
 
 删除隔离文件分为两种状态：
 
@@ -221,3 +224,41 @@ Pydantic 字段长度和应用层限流不能代替正式入口的请求体大�
 - Nginx 或平台级请求体、连接数及请求速率限制；
 - 真实公网拓扑下无法伪造代理头；
 - 监控实际误伤率与攻击流量，并按数据调整额度。
+
+## 隔离仿真测试数据
+
+`scripts/seed_test_data.py` 只用于本地 `APP_ENV=test` 或 `development`。它要求显式
+传入绝对测试数据库、`--confirm-test-data` 和批次标记；production 会在打开数据库或
+调用 DeepSeek 前拒绝。示例：
+
+```bash
+APP_ENV=test TRUSTED_ORIGINS=https://test.example python scripts/seed_test_data.py \
+  --database /tmp/summercamp-test/site.db \
+  --batch-id demo-20260903 --confirm-test-data
+```
+
+生成的作者会标记为“示例学生（测试）”，回复标记为“实践团答疑（测试）”，专业回答
+保持待审核。需要清理时使用相同的 `--batch-id --cleanup-batch`；不要指向真实数据库。
+
+## 公开内容初始化
+
+`scripts/seed_public_content.py` 用于准备首批可公开的问答内容，但仍然只接受隔离的
+`test` 或 `development` 数据库，并要求显式的绝对路径和
+`--confirm-public-content`。它在打开数据库或调用 DeepSeek 前拒绝 `production`，不会
+自动写入正式站。请先准备可丢弃的数据库和测试环境变量，再按需运行：
+
+```bash
+APP_ENV=test TRUSTED_ORIGINS=https://test.example python scripts/seed_public_content.py \
+  --database /tmp/summercamp-public-content/site.db \
+  --confirm-public-content
+```
+
+工具写入 8 条作者标注为“学生常见问题（团队整理）”且已发布的常见问答，回复作者为
+“躬行启杭实践团”；另写入 6 条作者标注为“专业问题（团队整理）”的问题，并调用现有
+DeepSeek 生成待审核回答。所有记录使用实际执行时的 UTC 时间，不伪装真实学生，也不
+虚构历史发布时间。DeepSeek 失败会使整批事务回滚，问题内容已存在时会拒绝重复执行。
+
+这里的“公开”只表示记录的发布状态和作者标识符合网站展示规则，不表示本次操作已经
+触碰正式站。正式站初始化须另行备份、审批和维护操作；本工具不会替代该流程。与之不同，
+上面的 `seed_test_data.py` 是演示数据工具，随机历史日期只允许出现在明确隔离的测试
+数据库中，不能复制到正式内容。
