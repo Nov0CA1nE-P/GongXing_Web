@@ -10,7 +10,7 @@ from abuse_protection import (
 from auth import AdminSession, require_admin, require_admin_write
 from config import UPLOADS_DIR
 from database import get_db
-from file_storage import public_pdf_filename
+from file_storage import public_courseware_reference
 from services.ai_service import ask_deepseek
 
 router = APIRouter(prefix="/api/qanda", tags=["qanda"])
@@ -284,7 +284,7 @@ def get_stats():
     total_courseware = sum(
         1
         for row in courseware_rows
-        if public_pdf_filename(row, uploads_dir=UPLOADS_DIR) is not None
+        if public_courseware_reference(row, uploads_dir=UPLOADS_DIR) is not None
     )
     total_messages = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     total_likes = conn.execute("SELECT COALESCE(SUM(likes), 0) FROM answers WHERE status = 'published'").fetchone()[0]

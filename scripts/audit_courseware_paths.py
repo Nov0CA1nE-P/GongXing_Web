@@ -33,9 +33,15 @@ def audit(database: Path, uploads_dir: Path) -> Counter:
     database_uri = f"{database.resolve().as_uri()}?mode=ro"
     conn = sqlite3.connect(database_uri, uri=True)
     try:
-        rows = conn.execute(
-            "SELECT pdf_path, pptx_path FROM courseware"
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                "SELECT file_path, pdf_path, pptx_path FROM courseware"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # 旧数据库尚未执行通用字段迁移时仍可只读审计。
+            rows = conn.execute(
+                "SELECT pdf_path, pptx_path FROM courseware"
+            ).fetchall()
         for row in rows:
             for stored_value in row:
                 if not stored_value:

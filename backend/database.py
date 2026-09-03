@@ -28,6 +28,8 @@ def init_db():
             tags TEXT DEFAULT '',
             pdf_path TEXT DEFAULT '',
             pptx_path TEXT DEFAULT '',
+            file_path TEXT DEFAULT '',
+            file_type TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -80,19 +82,33 @@ def init_db():
         );
     """)
 
-    # 添加缺失的列（兼容旧数据库）
-    try:
-        cursor.execute("ALTER TABLE courseware ADD COLUMN tags TEXT DEFAULT ''")
-    except:
-        pass
-    try:
+    # 通过列清单做幂等迁移，保留旧列和旧数据，不依赖异常控制流程。
+    courseware_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(courseware)")
+    }
+    for column, declaration in (
+        ("tags", "TEXT DEFAULT ''"),
+        ("file_path", "TEXT DEFAULT ''"),
+        ("file_type", "TEXT DEFAULT ''"),
+    ):
+        if column not in courseware_columns:
+            cursor.execute(
+                f"ALTER TABLE courseware ADD COLUMN {column} {declaration}"
+            )
+
+    answer_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(answers)")
+    }
+    if "likes" not in answer_columns:
         cursor.execute("ALTER TABLE answers ADD COLUMN likes INTEGER DEFAULT 0")
-    except:
-        pass
-    try:
-        cursor.execute("ALTER TABLE messages ADD COLUMN reactions TEXT DEFAULT '{}'")
-    except:
-        pass
+
+    message_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(messages)")
+    }
+    if "reactions" not in message_columns:
+        cursor.execute(
+            "ALTER TABLE messages ADD COLUMN reactions TEXT DEFAULT '{}'"
+        )
 
     conn.commit()
     conn.close()

@@ -26,6 +26,9 @@ MAX_PPTX_ENTRIES = 2048
 MAX_PPTX_UNCOMPRESSED_BYTES = 250 * 1024 * 1024
 MAX_CONTENT_TYPES_BYTES = 1024 * 1024
 MAX_PRESENTATION_XML_BYTES = 8 * 1024 * 1024
+MAX_OOXML_ENTRIES = MAX_PPTX_ENTRIES
+MAX_OOXML_UNCOMPRESSED_BYTES = MAX_PPTX_UNCOMPRESSED_BYTES
+MAX_DOCUMENT_XML_BYTES = 8 * 1024 * 1024
 
 SUPPORTED_MIME_TYPES = {
     ".pdf": {"application/pdf"},
@@ -37,6 +40,10 @@ SUPPORTED_MIME_TYPES = {
     ".pptx": {
         "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     },
+    ".docx": {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    },
+    ".jpg": {"image/jpeg"},
 }
 DOWNLOAD_MIME_TYPES = {
     ".pdf": "application/pdf",
@@ -45,6 +52,11 @@ DOWNLOAD_MIME_TYPES = {
         "application/vnd.openxmlformats-officedocument."
         "presentationml.presentation"
     ),
+    ".docx": (
+        "application/vnd.openxmlformats-officedocument."
+        "wordprocessingml.document"
+    ),
+    ".jpg": "image/jpeg",
 }
 PPTX_MAIN_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument."
@@ -57,7 +69,7 @@ _CLEANABLE_TEMP_NAME_RE = re.compile(
 _RECOVERY_HOLD_NAME_RE = re.compile(
     r"^\.recover-[0-9a-f]{32}-[0-9]+\.hold$"
 )
-_UUID_FILE_RE = re.compile(r"^[0-9a-f]{32}\.(?:pdf|ppt|pptx)$")
+_UUID_FILE_RE = re.compile(r"^[0-9a-f]{32}\.(?:pdf|ppt|pptx|docx|jpg)$")
 
 
 class UnsafeStoredPath(ValueError):
@@ -147,7 +159,7 @@ def resolve_upload_path(
 
 def serialize_courseware_row(row) -> dict:
     result = dict(row)
-    for field in ("pdf_path", "pptx_path"):
+    for field in ("pdf_path", "pptx_path", "file_path"):
         stored_value = result.get(field, "")
         if not stored_value:
             result[field] = ""
@@ -156,7 +168,49 @@ def serialize_courseware_row(row) -> dict:
             result[field] = safe_stored_basename(stored_value)
         except UnsafeStoredPath:
             result[field] = ""
+    reference = courseware_file_reference(row)
+    if reference is None:
+        result["file_path"] = ""
+        result["file_type"] = ""
+        result["display_mode"] = ""
+    else:
+        filename, extension = reference
+        result["file_path"] = filename
+        result["file_type"] = extension.lstrip(".")
+        result["display_mode"] = (
+            "inline" if extension in {".pdf", ".jpg"} else "download"
+        )
     return result
+
+
+def courseware_file_reference(row) -> tuple[str, str] | None:
+    """统一解析通用字段和旧字段，返回安全文件名与扩展名。"""
+    source = dict(row)
+    if source.get("file_path"):
+        try:
+            filename = safe_stored_basename(source["file_path"])
+        except UnsafeStoredPath:
+            return None
+        extension = Path(filename).suffix.lower()
+        return (filename, extension) if extension in SUPPORTED_MIME_TYPES else None
+    candidates: list[str] = []
+    for field in ("pdf_path", "pptx_path"):
+        if source.get(field):
+            candidates.append(source[field])
+    for stored_value in candidates:
+        try:
+            filename = safe_stored_basename(stored_value)
+        except UnsafeStoredPath:
+            continue
+        extension = Path(filename).suffix.lower()
+        if extension in SUPPORTED_MIME_TYPES:
+            return filename, extension
+    return None
+
+
+def courseware_file_type(row) -> str | None:
+    reference = courseware_file_reference(row)
+    return reference[1].lstrip(".") if reference else None
 
 
 def has_pdf_content_signature(path: Path) -> bool:
@@ -202,21 +256,56 @@ def public_pdf_filename(
     return filename
 
 
+def public_courseware_reference(
+    row,
+    *,
+    uploads_dir: str | Path = UPLOADS_DIR,
+) -> tuple[str, str] | None:
+    """返回公开支持格式的安全文件引用；异常和内容篡改均视为不可用。"""
+    source = dict(row)
+    reference = courseware_file_reference(row)
+    if reference is None:
+        return None
+    filename, extension = reference
+    if extension == ".ppt" or (
+        not source.get("file_path") and extension in {".pptx", ".docx", ".jpg"}
+    ):
+        # 旧字段中的演示文稿只保留后台兼容和删除能力；新记录走通用字段。
+        return None
+    try:
+        file_path = resolve_upload_path(
+            filename,
+            uploads_dir=uploads_dir,
+            require_exists=True,
+        )
+        _validate_file_content(file_path, extension)
+    except (UnsafeStoredPath, FileNotFoundError, OSError, RuntimeError, ValueError):
+        return None
+    if file_path.is_symlink() or not file_path.is_file():
+        return None
+    return filename, extension
+
+
 def serialize_public_courseware_row(
     row,
     *,
     uploads_dir: str | Path = UPLOADS_DIR,
 ) -> dict | None:
-    filename = public_pdf_filename(row, uploads_dir=uploads_dir)
-    if filename is None:
+    reference = public_courseware_reference(row, uploads_dir=uploads_dir)
+    if reference is None:
         return None
+    filename, extension = reference
     source = dict(row)
     return {
         "id": source["id"],
         "title": source["title"],
         "description": source.get("description", ""),
         "tags": source.get("tags", ""),
-        "pdf_path": filename,
+        # 保留 pdf_path 兼容现有 PDF 客户端；新客户端使用通用字段。
+        "pdf_path": filename if extension == ".pdf" else "",
+        "file_path": filename,
+        "file_type": extension.lstrip("."),
+        "display_mode": "inline" if extension in {".pdf", ".jpg"} else "download",
     }
 
 
@@ -295,6 +384,133 @@ def _validate_pptx(path: Path) -> None:
         raise ValueError("PPTX 文件结构无效") from exc
 
 
+DOCX_MAIN_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument."
+    "wordprocessingml.document.main+xml"
+)
+
+
+def _validate_docx(path: Path) -> None:
+    """校验 DOCX 的 ZIP 结构和主文档类型，不将压缩包解压到磁盘。"""
+    if not zipfile.is_zipfile(path):
+        raise ValueError("DOCX 文件结构无效")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            entries = archive.infolist()
+            if len(entries) > MAX_OOXML_ENTRIES:
+                raise ValueError("DOCX ZIP 条目过多")
+            total_size = 0
+            names: set[str] = set()
+            for entry in entries:
+                pure_name = PurePosixPath(entry.filename)
+                if (
+                    pure_name.is_absolute()
+                    or PureWindowsPath(entry.filename).drive
+                    or ".." in pure_name.parts
+                    or "\\" in entry.filename
+                ):
+                    raise ValueError("DOCX ZIP 包含危险路径")
+                if entry.filename in names:
+                    raise ValueError("DOCX ZIP 包含重复条目")
+                names.add(entry.filename)
+                total_size += entry.file_size
+                if total_size > MAX_OOXML_UNCOMPRESSED_BYTES:
+                    raise ValueError("DOCX 解压后内容超过安全上限")
+                if entry.file_size and entry.compress_size == 0:
+                    raise ValueError("DOCX ZIP 压缩信息无效")
+                if (
+                    entry.compress_size
+                    and entry.file_size / entry.compress_size > 200
+                ):
+                    raise ValueError("DOCX ZIP 压缩比异常")
+
+            required = {"[Content_Types].xml", "word/document.xml"}
+            if not required.issubset(names):
+                raise ValueError("DOCX 缺少必要结构")
+            content_info = archive.getinfo("[Content_Types].xml")
+            document_info = archive.getinfo("word/document.xml")
+            if content_info.file_size > MAX_CONTENT_TYPES_BYTES:
+                raise ValueError("DOCX 内容类型 XML 超过安全上限")
+            if document_info.file_size > MAX_DOCUMENT_XML_BYTES:
+                raise ValueError("DOCX 主文档 XML 超过安全上限")
+            content_types = _read_limited(
+                archive, "[Content_Types].xml", MAX_CONTENT_TYPES_BYTES
+            )
+            _read_limited(archive, "word/document.xml", MAX_DOCUMENT_XML_BYTES)
+            root = ElementTree.fromstring(content_types)
+            valid_main_type = any(
+                element.attrib.get("PartName") == "/word/document.xml"
+                and element.attrib.get("ContentType") == DOCX_MAIN_CONTENT_TYPE
+                for element in root
+                if element.tag.rsplit("}", 1)[-1] == "Override"
+            )
+            if not valid_main_type:
+                raise ValueError("DOCX 主文档类型声明无效")
+    except (
+        zipfile.BadZipFile,
+        KeyError,
+        ElementTree.ParseError,
+        RuntimeError,
+        NotImplementedError,
+        OSError,
+    ) as exc:
+        raise ValueError("DOCX 文件结构无效") from exc
+
+
+def _validate_jpeg(path: Path) -> None:
+    """检查 JPEG 段结构、图像帧和文件结束标记。"""
+    data = path.read_bytes()
+    if len(data) < 4 or data[:2] != b"\xff\xd8" or data[-2:] != b"\xff\xd9":
+        raise ValueError("JPG 文件结构无效")
+    position = 2
+    saw_frame = False
+    saw_scan = False
+    length = len(data)
+    while position < length - 2:
+        if data[position] != 0xFF:
+            raise ValueError("JPG 文件段结构无效")
+        while position < length and data[position] == 0xFF:
+            position += 1
+        if position >= length:
+            raise ValueError("JPG 文件段结构无效")
+        marker = data[position]
+        position += 1
+        if marker == 0xD9:
+            break
+        if marker == 0xDA:
+            saw_scan = True
+            # 扫描数据直到 EOI；其中的 FF00 是转义字节。
+            while position < length - 1:
+                if data[position] == 0xFF:
+                    if data[position + 1] == 0xD9:
+                        if not saw_frame or not saw_scan:
+                            raise ValueError("JPG 缺少有效图像帧")
+                        return
+                    if data[position + 1] == 0x00:
+                        position += 2
+                        continue
+                position += 1
+            raise ValueError("JPG 缺少结束标记")
+        if marker in {0x01} or 0xD0 <= marker <= 0xD7:
+            continue
+        if position + 2 > length:
+            raise ValueError("JPG 文件段长度无效")
+        segment_length = int.from_bytes(data[position:position + 2], "big")
+        if segment_length < 2 or position + segment_length > length:
+            raise ValueError("JPG 文件段长度无效")
+        if 0xC0 <= marker <= 0xC3 or 0xC5 <= marker <= 0xC7 or 0xC9 <= marker <= 0xCB or 0xCD <= marker <= 0xCF:
+            if segment_length < 8:
+                raise ValueError("JPG 图像帧无效")
+            height = int.from_bytes(data[position + 3:position + 5], "big")
+            width = int.from_bytes(data[position + 5:position + 7], "big")
+            if not width or not height:
+                raise ValueError("JPG 图像尺寸无效")
+            saw_frame = True
+        position += segment_length
+    if not saw_frame or not saw_scan:
+        raise ValueError("JPG 缺少有效图像帧")
+
+
 def _validate_file_content(path: Path, extension: str) -> None:
     if extension == ".pdf":
         if not has_pdf_content_signature(path):
@@ -310,7 +526,16 @@ def _validate_file_content(path: Path, extension: str) -> None:
         except (OSError, IOError, OleFileError) as exc:
             raise ValueError("PPT OLE 容器损坏") from exc
         return
-    _validate_pptx(path)
+    if extension == ".pptx":
+        _validate_pptx(path)
+        return
+    if extension == ".docx":
+        _validate_docx(path)
+        return
+    if extension == ".jpg":
+        _validate_jpeg(path)
+        return
+    raise ValueError("文件类型不受支持")
 
 
 def validate_upload_metadata(upload: UploadFile) -> str:
@@ -318,7 +543,7 @@ def validate_upload_metadata(upload: UploadFile) -> str:
     if not is_safe_basename(filename):
         raise HTTPException(
             status_code=400,
-            detail="仅支持有效的 PDF、PPT、PPTX 文件名",
+            detail="仅支持有效的 PDF、PPT、PPTX、DOCX、JPG 文件名",
         )
     extension = Path(filename).suffix.lower()
     content_type = _normalized_content_type(upload.content_type)

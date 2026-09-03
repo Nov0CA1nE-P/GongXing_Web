@@ -17,7 +17,33 @@ const addViewed = (id: number) => {
   localStorage.setItem('cw_viewed', JSON.stringify(v.slice(0, 10)))
 }
 
-function PDFViewer({ url, title }: { url: string; title: string }) {
+function CoursewareViewer({
+  url,
+  title,
+  fileType,
+}: { url: string; title: string; fileType: PublicCoursewareItem['file_type'] }) {
+  const label = fileType.toUpperCase()
+  if (fileType === 'pptx' || fileType === 'docx') {
+    return (
+      <div style={{ marginTop: '20px', textAlign: 'center' }}>
+        <p style={{ color: 'var(--ink-light)', marginBottom: '16px' }}>
+          此格式仅支持下载，暂不提供网页预览。
+        </p>
+        <a href={url} download className="btn btn-primary">下载 {label} 文件</a>
+      </div>
+    )
+  }
+  if (fileType === 'jpg') {
+    return (
+      <div style={{ marginTop: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
+          <a href={url} target="_blank" rel="noopener noreferrer" className="btn btn-outline btn-sm">新窗口查看</a>
+          <a href={url} download className="btn btn-primary btn-sm">下载 JPG</a>
+        </div>
+        <img src={url} alt={title} style={{ display: 'block', maxWidth: '100%', maxHeight: '640px', margin: '0 auto', borderRadius: 'var(--radius-sm)' }} />
+      </div>
+    )
+  }
   return (
     <div style={{ marginTop: '20px' }}>
       <div style={{
@@ -121,7 +147,7 @@ export default function Courseware() {
     <div>
       <div className="page-header">
         <h1>课件展示</h1>
-        <p>按学科标签浏览公开 PDF，支持在线查看和下载</p>
+        <p>按学科标签浏览公开课件，支持在线查看和下载</p>
       </div>
 
       <div className="container">
@@ -151,9 +177,10 @@ export default function Courseware() {
                 </div>
               )}
 
-              <PDFViewer
-                url={getUploadedFileUrl(selected.pdf_path)}
+              <CoursewareViewer
+                url={getUploadedFileUrl(selected.file_path)}
                 title={selected.title}
+                fileType={selected.file_type}
               />
             </div>
           </div>
@@ -237,6 +264,9 @@ export default function Courseware() {
                               {isViewed && <span style={{ fontSize: '0.7rem', color: 'var(--green)', fontWeight: 400, marginLeft: '6px' }}>已读</span>}
                             </h3>
                             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                              <span className="tag" style={{ background: 'var(--gold-light)', color: 'var(--ink)', fontSize: '0.7rem' }}>
+                                {item.file_type.toUpperCase()}
+                              </span>
                               {item.tags && item.tags.split(/[,，]/).map((t: string) => (
                                 <span key={t} className="tag" style={{ background: 'var(--accent-glow)', color: 'var(--accent)', fontSize: '0.7rem' }}>
                                   {t.trim()}

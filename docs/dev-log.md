@@ -717,3 +717,26 @@
 - 全部部署 shell 通过 `bash -n`，部署与后端 Python 通过语法编译，
   `git diff --check` 通过。真实 Nginx、TLS、DNS、服务重启和浏览器冒烟属于
   合并后的目标机验收。
+
+## 2026-09-03：课件多格式支持与仿真测试数据工具
+
+### 修改内容
+
+- 在保留 `pdf_path`、`pptx_path` 的同时为课件表增加通用 `file_path`、`file_type`，
+  新上传记录统一保存服务端 UUID 文件名，旧 PDF/PPT/PPTX 记录继续按安全 basename 兼容。
+- 管理员上传入口支持 PDF、PPTX、DOCX、JPG；后端对扩展名、声明 MIME 和真实内容
+  进行一致性校验，DOCX 不落盘解压，JPG 检查完整 JPEG 段结构。
+- 专用下载接口按格式返回 inline 或 attachment，并继续执行数据库关联、路径边界、
+  非符号链接和内容有效性检查；旧版 PPT 仍可由管理员查看和删除但不公开下载。
+- 新增 `scripts/seed_test_data.py`，仅在 test/development 且显式指定数据库和确认参数时
+  生成可识别批次；AI 回答失败会整体回滚，支持按批次安全清理，production 在打开数据库
+  或调用 DeepSeek 前即拒绝。
+
+### 验证与遗留
+
+- 本轮使用临时数据库、上传目录和测试数据批次，不读取或修改真实 `.env`、数据库、上传文件。
+- Python 3.13 隔离环境中的后端测试 96 项全部通过；新增四种格式、通用字段迁移和仿真
+  工具测试通过，Python 语法检查与 `git diff --check` 通过。
+- 真实隔离 Uvicorn HTTP 验证健康检查、`/data/site.db` 404、管理员登录、PDF 上传/下载/删除；
+  专用 TestClient 验证 PPTX/DOCX/JPG 下载头和坏内容拒绝。前端 build、lint 均通过。
+- 不在本轮增加 Office 转换、对象存储、照片墙或视频处理；旧版 PPT 仍只保留后台兼容和删除能力。
