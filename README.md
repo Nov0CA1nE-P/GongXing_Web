@@ -239,3 +239,26 @@ APP_ENV=test TRUSTED_ORIGINS=https://test.example python scripts/seed_test_data.
 
 生成的作者会标记为“示例学生（测试）”，回复标记为“实践团答疑（测试）”，专业回答
 保持待审核。需要清理时使用相同的 `--batch-id --cleanup-batch`；不要指向真实数据库。
+
+## 公开内容初始化
+
+`scripts/seed_public_content.py` 用于准备首批可公开的问答内容，但仍然只接受隔离的
+`test` 或 `development` 数据库，并要求显式的绝对路径和
+`--confirm-public-content`。它在打开数据库或调用 DeepSeek 前拒绝 `production`，不会
+自动写入正式站。请先准备可丢弃的数据库和测试环境变量，再按需运行：
+
+```bash
+APP_ENV=test TRUSTED_ORIGINS=https://test.example python scripts/seed_public_content.py \
+  --database /tmp/summercamp-public-content/site.db \
+  --confirm-public-content
+```
+
+工具写入 8 条作者标注为“学生常见问题（团队整理）”且已发布的常见问答，回复作者为
+“躬行启杭实践团”；另写入 6 条作者标注为“专业问题（团队整理）”的问题，并调用现有
+DeepSeek 生成待审核回答。所有记录使用实际执行时的 UTC 时间，不伪装真实学生，也不
+虚构历史发布时间。DeepSeek 失败会使整批事务回滚，问题内容已存在时会拒绝重复执行。
+
+这里的“公开”只表示记录的发布状态和作者标识符合网站展示规则，不表示本次操作已经
+触碰正式站。正式站初始化须另行备份、审批和维护操作；本工具不会替代该流程。与之不同，
+上面的 `seed_test_data.py` 是演示数据工具，随机历史日期只允许出现在明确隔离的测试
+数据库中，不能复制到正式内容。
